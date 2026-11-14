@@ -148,9 +148,9 @@ def convert_stl_to_gyroid(stl_mesh, params, progress_callback=None):
 - [x] Implement fast streaming quantile estimator for automatic `infill_percent` targeting.
 
 ### Phase 4: Isosurface Extraction & Industrial Slicing Output
-- [ ] Implement parallel Marching Cubes in Rust yielding indexed triangles.
-- [ ] Enforce outward-pointing normals and non-degenerate manifold winding (eliminating Farsoon BuildStar slicing errors at the vertex/face emission level).
-- [ ] Integrate native CSG boolean subtraction for shell boundary retention.
+- [x] Implement parallel Marching Cubes in Rust yielding indexed triangles.
+- [x] Enforce outward-pointing normals and non-degenerate manifold winding (eliminating Farsoon BuildStar slicing errors at the vertex/face emission level).
+- [x] Extract watertight internal void isosurface (`void_mesh`) for shell boundary CSG boolean subtraction (`manifold3d`).
 
 ### Phase 5: Python Integration & GUI Verification
 - [ ] Wire PyO3 extension into `pyroid/core.py` and `pyroid/mesh_utils.py`.
@@ -159,13 +159,13 @@ def convert_stl_to_gyroid(stl_mesh, params, progress_callback=None):
 - [ ] Test standalone build: `uv run python scripts/release.py`.
 
 ### Phase 6: SolidCraft Hooking (Future Target)
-- [ ] Expose clean Rust trait in `pyroid-core`:
+- [x] Expose clean Rust trait in `pyroid-core`:
   ```rust
   pub trait LatticeInfillProvider {
       fn generate_infill(&self, boundary: &Trimesh, params: &InfillParams) -> Result<Trimesh, String>;
   }
   ```
-- [ ] Reference `pyroid-core` from SolidCraft via Cargo path dependency.
+- [ ] Reference `pyroid-core` from SolidCraft via Cargo path dependency (external repository).
 
 ---
 

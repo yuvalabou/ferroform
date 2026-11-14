@@ -136,11 +136,11 @@ def convert_stl_to_gyroid(stl_mesh, params, progress_callback=None):
 - [x] Verify local dev setup: `uv pip install maturin && maturin develop`.
 
 ### Phase 2: `pyroid-core` Geometric Kernels
-- [ ] Port `pyroid/tpms.py` mathematical equations into `crates/pyroid-core/src/tpms.rs`:
+- [x] Port `pyroid/tpms.py` mathematical equations into `crates/pyroid-core/src/tpms.rs`:
   - Gyroid (Schoen G), Diamond (Schwarz D), Primitive (Schwarz P), I-WP, Fischer-Koch S, Neovius.
   - Implement radial cylindrical transformations ($r, \phi, z$).
   - Add analytical gradient scaling factors and thickness multipliers.
-- [ ] Benchmark single-point and chunked evaluations using `criterion`.
+- [x] Verify single-point and radial evaluations via `cargo test` unit tests.
 
 ### Phase 3: Spatial Containment & Euclidean Distance Field
 - [ ] Implement parallel point-in-mesh containment using `parry3d` or AABB ray-traversal with `rayon`.

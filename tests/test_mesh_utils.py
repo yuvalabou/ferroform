@@ -4,7 +4,12 @@ import numpy as np
 import pyvista as pv
 import trimesh
 
-from pyroid.mesh_utils import convert_stl_to_gyroid, export_stl_binary, load_stl, prepare_for_printing
+from pyroid.mesh_utils import (
+    convert_stl_to_gyroid,
+    export_stl_binary,
+    load_trimesh,
+    prepare_for_printing,
+)
 from pyroid.core import GyroidGenerator
 from pyroid.models import GyroidParams
 from pyroid.models import STLConversionParams
@@ -15,7 +20,7 @@ def test_stl_gyroid_conversion(tmp_path):
     tmp_path_stl = str(tmp_path / "cube.stl")
     cube.export(tmp_path_stl)
 
-    tri_mesh, _ = load_stl(tmp_path_stl)
+    tri_mesh = load_trimesh(tmp_path_stl)
     assert len(tri_mesh.vertices) > 0
 
     params = STLConversionParams(
@@ -34,7 +39,7 @@ def test_stl_gyroid_conversion_with_preserved_shell(tmp_path):
     tmp_path_stl = str(tmp_path / "cube.stl")
     cube.export(tmp_path_stl)
 
-    tri_mesh, _ = load_stl(tmp_path_stl)
+    tri_mesh = load_trimesh(tmp_path_stl)
     params = STLConversionParams(
         stl_path=tmp_path_stl,
         resolution=30,
@@ -66,7 +71,7 @@ def test_stl_gyroid_calibrated_wall_thickness(tmp_path):
     tmp_path_stl = str(tmp_path / "cube.stl")
     cube.export(tmp_path_stl)
 
-    tri_mesh, _ = load_stl(tmp_path_stl)
+    tri_mesh = load_trimesh(tmp_path_stl)
     params_thin = STLConversionParams(
         stl_path=tmp_path_stl, resolution=40, cell_size=5.0, wall_thickness=0.4
     )
@@ -87,7 +92,7 @@ def test_stl_gyroid_progress_callback(tmp_path):
     tmp_path_stl = str(tmp_path / "cube.stl")
     cube.export(tmp_path_stl)
 
-    tri_mesh, _ = load_stl(tmp_path_stl)
+    tri_mesh = load_trimesh(tmp_path_stl)
     params = STLConversionParams(
         stl_path=tmp_path_stl, resolution=30, cell_size=5.0, wall_thickness=0.8
     )
@@ -109,7 +114,7 @@ def test_stl_gyroid_skeletal_conversion(tmp_path):
     tmp_path_stl = str(tmp_path / "cube.stl")
     cube.export(tmp_path_stl)
 
-    tri_mesh, _ = load_stl(tmp_path_stl)
+    tri_mesh = load_trimesh(tmp_path_stl)
     params_sheet = STLConversionParams(
         stl_path=tmp_path_stl, resolution=30, cell_size=5.0, wall_thickness=0.8, is_skeletal=False
     )
@@ -143,7 +148,7 @@ def test_stl_gyroid_asymmetric_cavities(tmp_path):
     tmp_path_stl = str(tmp_path / "cube.stl")
     cube.export(tmp_path_stl)
 
-    tri_mesh, _ = load_stl(tmp_path_stl)
+    tri_mesh = load_trimesh(tmp_path_stl)
     params_pos = STLConversionParams(
         stl_path=tmp_path_stl, resolution=30, cell_size=5.0, wall_thickness=0.6, bias=0.4
     )
@@ -156,7 +161,7 @@ def test_stl_gyroid_target_infill_percent(tmp_path):
     cube = trimesh.creation.box(extents=[12, 12, 12])
     tmp_path_stl = str(tmp_path / "cube.stl")
     cube.export(tmp_path_stl)
-    tri_mesh, _ = load_stl(tmp_path_stl)
+    tri_mesh = load_trimesh(tmp_path_stl)
 
     cell_25 = STLConversionParams.estimate_cell_size(25.0, 0.8)
     cell_60 = STLConversionParams.estimate_cell_size(60.0, 0.8)
@@ -192,7 +197,7 @@ def test_export_stl_binary_buildstar_compatibility(tmp_path):
     out_stl = str(tmp_path / "out_buildstar.stl")
     cube.export(in_stl)
 
-    tri_mesh, _ = load_stl(in_stl)
+    tri_mesh = load_trimesh(in_stl)
     params = STLConversionParams(
         stl_path=in_stl, resolution=30, cell_size=4.0, wall_thickness=0.6
     )

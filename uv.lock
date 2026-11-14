@@ -1455,8 +1455,6 @@ dependencies = [
     { name = "pyvista" },
     { name = "pyvistaqt" },
     { name = "qdarkstyle" },
-    { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "trimesh", extra = ["easy"] },
 ]
 
@@ -1482,7 +1480,6 @@ requires-dist = [
     { name = "pyvistaqt", specifier = ">=0.11.0" },
     { name = "qdarkstyle", specifier = ">=3.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "scipy", specifier = ">=1.7.0" },
     { name = "trimesh", extras = ["easy"], specifier = ">=4.0.0" },
 ]
 provides-extras = ["dev"]

@@ -175,7 +175,7 @@ def main():
                 infill_percent=args.infill,
             )
             print(f"Converting STL volume to {args.tpms_type.title()} lattice...")
-            generator.convert_from_stl(stl_params)
+            generator.convert_from_stl(stl_params, include_cavities=False)
 
         else:
             # Standard parametric gyroid generation
@@ -225,7 +225,7 @@ def main():
                 print(f"Preset saved to {args.save_preset}")
 
             print("Generating parametric gyroid structure...")
-            generator.generate()
+            generator.generate(include_cavities=False)
 
         # Save output mesh
         ext = os.path.splitext(args.output)[1].lower()
@@ -234,7 +234,7 @@ def main():
                 generator.save_obj(args.output)
             case _:
                 flat_cap = args.flat_cap
-                generator.save_stl(args.output, prepare_manifold=True, flat_cap=flat_cap)
+                generator.save_stl(args.output, flat_cap=flat_cap)
         print(f"Mesh saved successfully to {args.output}")
 
         # Offscreen render thumbnail if requested

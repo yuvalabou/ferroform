@@ -53,6 +53,7 @@ fn parse_parametric_params(params: &Bound<'_, PyDict>) -> PyResult<ParametricPar
         cell_radius: dict_get(params, "cell_radius")?,
         cell_height: dict_get(params, "cell_height")?,
         bias: dict_get(params, "bias")?,
+        include_cavities: dict_get_opt(params, "include_cavities")?.unwrap_or(true),
     })
 }
 
@@ -70,12 +71,8 @@ fn parse_stl_params(params: &Bound<'_, PyDict>) -> PyResult<StlParams> {
         shell_thickness: dict_get(params, "shell_thickness")?,
         is_skeletal: dict_get(params, "is_skeletal")?,
         infill_percent: dict_get_opt(params, "infill_percent")?,
+        include_cavities: dict_get_opt(params, "include_cavities")?.unwrap_or(true),
     })
-}
-
-#[pyfunction]
-fn core_version() -> &'static str {
-    pyroid_core::version()
 }
 
 /// Generate a radially symmetrical parametric TPMS structure and dual cavities.
@@ -154,7 +151,6 @@ fn convert_stl_to_tpms<'py>(
 
 #[pymodule]
 fn pyroid_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(core_version, m)?)?;
     m.add_function(wrap_pyfunction!(generate_parametric_tpms, m)?)?;
     m.add_function(wrap_pyfunction!(convert_stl_to_tpms, m)?)?;
     Ok(())

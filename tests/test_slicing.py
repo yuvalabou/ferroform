@@ -1,7 +1,7 @@
 """Integration tests for 2D cross-section slicing (BuildStar emulation)."""
 
 import trimesh
-from pyroid.mesh_utils import convert_stl_to_gyroid, export_stl_binary, load_stl
+from pyroid.mesh_utils import convert_stl_to_gyroid, export_stl_binary, load_trimesh
 from pyroid.models import STLConversionParams
 
 
@@ -12,7 +12,7 @@ def test_slice_stl_cylinder_preserved_shell(tmp_path):
     out_stl = str(tmp_path / "out_cyl.stl")
     cyl.export(in_stl)
 
-    tri_mesh, _ = load_stl(in_stl)
+    tri_mesh = load_trimesh(in_stl)
     params = STLConversionParams(
         stl_path=in_stl,
         resolution=35,

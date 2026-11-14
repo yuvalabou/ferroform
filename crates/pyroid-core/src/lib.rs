@@ -16,10 +16,6 @@ use crate::marching::{
 };
 use crate::tpms::TpmsType;
 
-pub fn version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
-
 /// Parameters for radially symmetrical parametric TPMS generation.
 #[derive(Clone, Debug)]
 pub struct ParametricParams {
@@ -35,6 +31,7 @@ pub struct ParametricParams {
     pub cell_radius: f64,
     pub cell_height: f64,
     pub bias: f64,
+    pub include_cavities: bool,
 }
 
 impl ParametricParams {
@@ -74,6 +71,7 @@ pub struct StlParams {
     pub shell_thickness: f64,
     pub is_skeletal: bool,
     pub infill_percent: Option<f64>,
+    pub include_cavities: bool,
 }
 
 pub type InfillParams = StlParams;
@@ -193,17 +191,22 @@ pub fn generate_parametric(
     let scale_y = 2.0 * PI * params.cell_radius / params.b;
     let scale_z = 2.0 * PI * params.cell_height / params.c;
 
-    let mut raw_g = vec![0.0; res * res * res];
-    raw_g
+    let total = res * res * res;
+    let mut main_field = vec![1.0; total];
+    main_field
         .par_chunks_mut(res * res)
         .enumerate()
         .for_each(|(i, slab)| {
+            if !mask_i[i] {
+                return;
+            }
             let x = r_aux[i] * scale_x;
             for (j, &phi) in phis.iter().enumerate() {
                 let y = phi * params.phi_scale * scale_y;
                 let row_off = j * res;
                 for (k, &z) in zs.iter().enumerate() {
-                    slab[row_off + k] = params.tpms_type.eval_radial(x, y, z * scale_z) + params.bias;
+                    slab[row_off + k] =
+                        params.tpms_type.eval_radial(x, y, z * scale_z) + params.bias;
                 }
             }
         });
@@ -211,45 +214,45 @@ pub fn generate_parametric(
     progress(60, "Transforming coordinates to Cartesian...");
     progress(80, "Extracting isosurface contour...");
 
-    let t_sheet = 0.2 * (params.tpms_type.thickness_multiplier() / 4.80);
-    let total = raw_g.len();
-    let mut main_field = vec![1.0; total];
-    let mut cav_a_field = vec![1.0; total];
-    let mut cav_b_field = vec![1.0; total];
-
-    main_field
-        .par_chunks_mut(res * res)
-        .zip(cav_a_field.par_chunks_mut(res * res))
-        .zip(cav_b_field.par_chunks_mut(res * res))
-        .enumerate()
-        .for_each(|(i, ((m_slab, a_slab), b_slab))| {
-            if !mask_i[i] {
-                return;
-            }
-            let r_slab = &raw_g[i * res * res..(i + 1) * res * res];
-            for idx in 0..res * res {
-                let g = r_slab[idx];
-                m_slab[idx] = g;
-                a_slab[idx] = t_sheet - g;
-                b_slab[idx] = g + t_sheet;
-            }
-        });
-
     let mut mesh = extract_isosurface_cylindrical(&rs, &phis, &zs, ky, &main_field);
     manifold::ensure_positive_volume(&mut mesh);
 
-    let mut cavity_a = extract_isosurface_cylindrical(&rs, &phis, &zs, ky, &cav_a_field);
-    manifold::ensure_positive_volume(&mut cavity_a);
+    let (cavity_a, cavity_b) = if params.include_cavities {
+        let t_sheet = 0.2 * (params.tpms_type.thickness_multiplier() / 4.80);
+        let mut cav_a_field = vec![1.0; total];
+        let mut cav_b_field = vec![1.0; total];
 
-    let mut cavity_b = extract_isosurface_cylindrical(&rs, &phis, &zs, ky, &cav_b_field);
-    manifold::ensure_positive_volume(&mut cavity_b);
+        cav_a_field
+            .par_chunks_mut(res * res)
+            .zip(cav_b_field.par_chunks_mut(res * res))
+            .enumerate()
+            .for_each(|(i, (a_slab, b_slab))| {
+                if !mask_i[i] {
+                    return;
+                }
+                let m_slab = &main_field[i * res * res..(i + 1) * res * res];
+                for idx in 0..res * res {
+                    let g = m_slab[idx];
+                    a_slab[idx] = t_sheet - g;
+                    b_slab[idx] = g + t_sheet;
+                }
+            });
+
+        let mut cav_a = extract_isosurface_cylindrical(&rs, &phis, &zs, ky, &cav_a_field);
+        manifold::ensure_positive_volume(&mut cav_a);
+        let mut cav_b = extract_isosurface_cylindrical(&rs, &phis, &zs, ky, &cav_b_field);
+        manifold::ensure_positive_volume(&mut cav_b);
+        (Some(cav_a), Some(cav_b))
+    } else {
+        (None, None)
+    };
 
     progress(95, "Finalizing mesh...");
 
     Ok(GeneratedLattice {
         mesh,
-        cavity_a: Some(cavity_a),
-        cavity_b: Some(cavity_b),
+        cavity_a,
+        cavity_b,
         is_shell_void: false,
     })
 }
@@ -320,6 +323,7 @@ pub fn convert_stl(
         ),
     );
 
+    let is_shell_void = params.preserve_shell && params.shell_thickness > 0.0;
     let k_wave = 2.0 * PI / params.cell_size.max(0.001);
     let mut scalar_val = vec![0.0; total];
     scalar_val
@@ -327,11 +331,15 @@ pub fn convert_stl(
         .enumerate()
         .for_each(|(i, slab)| {
             let kx = k_wave * xs[i];
+            let in_slab = &inside_3d[i * ny * nz..(i + 1) * ny * nz];
             for (j, &y) in ys.iter().enumerate() {
                 let ky = k_wave * y;
                 let row_off = j * nz;
                 for (k, &z) in zs.iter().enumerate() {
-                    slab[row_off + k] = params.tpms_type.eval(kx, ky, k_wave * z) + params.bias;
+                    if is_shell_void || in_slab[row_off + k] {
+                        slab[row_off + k] =
+                            params.tpms_type.eval(kx, ky, k_wave * z) + params.bias;
+                    }
                 }
             }
         });
@@ -344,35 +352,27 @@ pub fn convert_stl(
 
     let t_norm = params.tpms_type.thickness_multiplier() / 4.80;
     let t = if let (Some(qv), false) = (q, params.is_skeletal) {
-        let abs_vals: Vec<f64> = scalar_val.iter().map(|v| v.abs()).collect();
-        bvh::compute_quantile(&abs_vals, &inside_3d, qv)
+        bvh::compute_abs_quantile(&scalar_val, &inside_3d, qv)
     } else {
         (params.tpms_type.thickness_multiplier() * params.wall_thickness
             / params.cell_size.max(0.001))
         .clamp(0.05, 1.5 * t_norm)
     };
 
-    let (void_scalar, mut field): (Vec<f64>, Vec<f64>) = if params.is_skeletal {
+    let skeletal_thresh = if params.is_skeletal {
         let r = params.wall_thickness / params.cell_size.max(0.001);
         let scale_strut = 3.0 * t_norm;
-        let thresh = if let Some(qv) = q {
+        if let Some(qv) = q {
             bvh::compute_quantile(&scalar_val, &inside_3d, qv)
         } else {
             (scale_strut * (r - 0.2)).clamp(-1.1 * t_norm, 1.1 * t_norm)
-        };
-        scalar_val
-            .par_iter()
-            .map(|&s| (thresh - s, s - thresh))
-            .unzip()
+        }
     } else {
-        scalar_val
-            .par_iter()
-            .map(|&s| (t - s.abs(), s.abs() - t))
-            .unzip()
+        0.0
     };
 
     let extract_cavities = |mask: &[bool]| -> (Option<MeshData>, Option<MeshData>) {
-        if params.is_skeletal {
+        if !params.include_cavities || params.is_skeletal {
             return (None, None);
         }
         let field_a: Vec<f64> = scalar_val
@@ -392,7 +392,7 @@ pub fn convert_stl(
         (Some(cav_a), Some(cav_b))
     };
 
-    if params.preserve_shell && params.shell_thickness > 0.0 {
+    if is_shell_void {
         progress(65, "Computing shell distance transform...");
         let dx = grid_extent[0] / ((nx - 1).max(1) as f64);
         let dy = grid_extent[1] / ((ny - 1).max(1) as f64);
@@ -405,8 +405,15 @@ pub fn convert_stl(
             .collect();
         let field_void: Vec<f64> = dist_inside
             .par_iter()
-            .zip(void_scalar.par_iter())
-            .map(|(&d, &vs)| (params.shell_thickness - d).max(vs))
+            .zip(scalar_val.par_iter())
+            .map(|(&d, &s)| {
+                let vs = if params.is_skeletal {
+                    skeletal_thresh - s
+                } else {
+                    t - s.abs()
+                };
+                (params.shell_thickness - d).max(vs)
+            })
             .collect();
 
         progress(75, "Extracting internal void isosurface...");
@@ -423,14 +430,19 @@ pub fn convert_stl(
     }
 
     progress(75, "Extracting gyroid isosurface contour...");
-    field
-        .par_iter_mut()
+    let field: Vec<f64> = scalar_val
+        .par_iter()
         .zip(inside_3d.par_iter())
-        .for_each(|(f, &is_in)| {
+        .map(|(&s, &is_in)| {
             if !is_in {
-                *f = 1.0;
+                1.0
+            } else if params.is_skeletal {
+                s - skeletal_thresh
+            } else {
+                s.abs() - t
             }
-        });
+        })
+        .collect();
 
     let mut mesh = extract_isosurface_cartesian(&xs, &ys, &zs, &field);
     manifold::ensure_positive_volume(&mut mesh);
@@ -502,6 +514,7 @@ mod tests {
                 cell_radius: 2.0,
                 cell_height: 3.0,
                 bias: 0.0,
+                include_cavities: true,
             };
             let mut updates = Vec::new();
             let out = generate_parametric(&params, |pct, msg| {
@@ -530,6 +543,7 @@ mod tests {
             shell_thickness: 1.0,
             is_skeletal: false,
             infill_percent: None,
+            include_cavities: true,
         };
         let out = convert_stl(&cube.vertices, &cube.faces, &params, |_, _| {}).unwrap();
         assert!(out.is_shell_void);

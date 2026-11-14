@@ -131,13 +131,6 @@ class STLConversionParams:
     )
 
     @staticmethod
-    def _tpms_surface_factor(tpms_type: str = "gyroid") -> float:
-        try:
-            return get_tpms_kernel(tpms_type).surface_factor
-        except Exception:
-            return 318.3
-
-    @staticmethod
     def estimate_infill(
         cell_size: float,
         wall_thickness: float,
@@ -150,7 +143,7 @@ class STLConversionParams:
         ratio = wall_thickness / cell_size
         if is_skeletal:
             return float(min(95.0, max(5.0, 50.0 + 95.5 * (ratio - 0.2))))
-        factor = STLConversionParams._tpms_surface_factor(tpms_type)
+        factor = get_tpms_kernel(tpms_type).surface_factor
         return float(min(95.0, max(5.0, factor * ratio)))
 
     @staticmethod
@@ -167,7 +160,7 @@ class STLConversionParams:
         if is_skeletal:
             ratio = max(0.05, 0.2 + (pct - 50.0) / 95.5)
             return float(wall_thickness / ratio)
-        factor = STLConversionParams._tpms_surface_factor(tpms_type)
+        factor = get_tpms_kernel(tpms_type).surface_factor
         return float(factor * wall_thickness / pct)
 
     def validate(self) -> tuple[bool, str]:

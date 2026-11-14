@@ -50,10 +50,12 @@ class GeneratorWorker(QThread):
         self.task_fn = task_fn
 
     def run(self):
+        def _report(pct: int, msg: str) -> None:
+            self.progress.emit(pct)
+            self.status.emit(msg)
+
         try:
-            generator = self.task_fn(
-                lambda pct, msg: (self.progress.emit(pct), self.status.emit(msg))
-            )
+            generator = self.task_fn(_report)
             self.progress.emit(100)
             self.finished.emit(generator)
         except Exception as e:
@@ -89,14 +91,14 @@ class GyroidGeneratorGUI(QMainWindow):
         self.create_visualization_panel(main_layout)
 
         # Status Bar & Progress Bar
-        self.statusBar = QStatusBar()
-        self.setStatusBar(self.statusBar)
-        self.statusBar.showMessage("Ready")
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("Ready")
 
         self.progressBar = QProgressBar()
         self.progressBar.setMaximumWidth(200)
         self.progressBar.setVisible(False)
-        self.statusBar.addPermanentWidget(self.progressBar)
+        self.status_bar.addPermanentWidget(self.progressBar)
 
         self.create_menu_bar()
         self.apply_theme("dark")
@@ -135,18 +137,9 @@ class GyroidGeneratorGUI(QMainWindow):
         # Scaffold Geometry Section
         tpms_box = QGroupBox("Scaffold Geometry")
         tpms_layout = QVBoxLayout(tpms_box)
-        tpms_combo_layout = QHBoxLayout()
-        tpms_combo_layout.addWidget(QLabel("TPMS Type:"))
-        self.param_tpms_combo = QComboBox()
-        for k in get_all_tpms_kernels():
-            self.param_tpms_combo.addItem(k.display_name, k.tpms_type.value)
-        self.param_tpms_combo.currentIndexChanged.connect(self.on_param_tpms_changed)
-        tpms_combo_layout.addWidget(self.param_tpms_combo)
-        tpms_layout.addLayout(tpms_combo_layout)
-        self.param_tpms_desc = QLabel(get_tpms_kernel("gyroid").description)
-        self.param_tpms_desc.setWordWrap(True)
-        self.param_tpms_desc.setStyleSheet("color: #888888; font-size: 11px;")
-        tpms_layout.addWidget(self.param_tpms_desc)
+        self.param_tpms_combo, self.param_tpms_desc = self._add_tpms_selector(
+            tpms_layout, "TPMS Type:"
+        )
         param_tab_layout.addWidget(tpms_box)
 
         # Parameters Section
@@ -209,23 +202,11 @@ class GyroidGeneratorGUI(QMainWindow):
         stl_params_layout = QVBoxLayout(stl_params_box)
 
         # TPMS Geometry
-        tpms_row = QHBoxLayout()
-        tpms_lbl = QLabel("TPMS Scaffold:")
-        tpms_tip = "Select TPMS lattice topology (Gyroid, Diamond, Primitive, I-WP, Fischer-Koch S, Neovius)"
-        tpms_lbl.setToolTip(tpms_tip)
-        tpms_row.addWidget(tpms_lbl)
-        self.stl_tpms_combo = QComboBox()
-        for k in get_all_tpms_kernels():
-            self.stl_tpms_combo.addItem(k.display_name, k.tpms_type.value)
-        self.stl_tpms_combo.setToolTip(tpms_tip)
-        self.stl_tpms_combo.currentIndexChanged.connect(self.on_stl_tpms_changed)
-        tpms_row.addWidget(self.stl_tpms_combo)
-        stl_params_layout.addLayout(tpms_row)
-
-        self.stl_tpms_desc = QLabel(get_tpms_kernel("gyroid").description)
-        self.stl_tpms_desc.setWordWrap(True)
-        self.stl_tpms_desc.setStyleSheet("color: #888888; font-size: 11px;")
-        stl_params_layout.addWidget(self.stl_tpms_desc)
+        self.stl_tpms_combo, self.stl_tpms_desc = self._add_tpms_selector(
+            stl_params_layout,
+            "TPMS Scaffold:",
+            tooltip="Select TPMS lattice topology (Gyroid, Diamond, Primitive, I-WP, Fischer-Koch S, Neovius)",
+        )
 
         # Resolution
         res_row = QHBoxLayout()
@@ -398,7 +379,9 @@ class GyroidGeneratorGUI(QMainWindow):
     def create_menu_bar(self):
         """Create top menu bar."""
         menubar = self.menuBar()
+        assert menubar is not None
         file_menu = menubar.addMenu("&File")
+        assert file_menu is not None
 
         new_action = QAction("&New Project", self)
         new_action.triggered.connect(self.new_project)
@@ -414,25 +397,39 @@ class GyroidGeneratorGUI(QMainWindow):
 
         file_menu.addSeparator()
         exit_action = QAction("E&xit", self)
-        exit_action.triggered.connect(self.close)
+        exit_action.triggered.connect(lambda: self.close())
         file_menu.addAction(exit_action)
 
         view_menu = menubar.addMenu("&View")
+        assert view_menu is not None
         reset_camera_action = QAction("Reset &Camera", self)
         reset_camera_action.triggered.connect(self.plotter.reset_camera)
         view_menu.addAction(reset_camera_action)
 
-    def on_param_tpms_changed(self, _index: int = 0):
-        if hasattr(self, "param_tpms_combo") and hasattr(self, "param_tpms_desc"):
-            tpms_val = self.param_tpms_combo.currentData()
-            kernel = get_tpms_kernel(tpms_val)
-            self.param_tpms_desc.setText(kernel.description)
+    def _add_tpms_selector(
+        self, parent_layout: QVBoxLayout, label_text: str, tooltip: str = ""
+    ) -> tuple[QComboBox, QLabel]:
+        """Build a TPMS combo box + description label pair wired to update on selection."""
+        row = QHBoxLayout()
+        lbl = QLabel(label_text)
+        combo = QComboBox()
+        for k in get_all_tpms_kernels():
+            combo.addItem(k.display_name, k.tpms_type.value)
+        if tooltip:
+            lbl.setToolTip(tooltip)
+            combo.setToolTip(tooltip)
+        row.addWidget(lbl)
+        row.addWidget(combo)
+        parent_layout.addLayout(row)
 
-    def on_stl_tpms_changed(self, _index: int = 0):
-        if hasattr(self, "stl_tpms_combo") and hasattr(self, "stl_tpms_desc"):
-            tpms_val = self.stl_tpms_combo.currentData()
-            kernel = get_tpms_kernel(tpms_val)
-            self.stl_tpms_desc.setText(kernel.description)
+        desc = QLabel(get_tpms_kernel("gyroid").description)
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #888888; font-size: 11px;")
+        parent_layout.addWidget(desc)
+        combo.currentIndexChanged.connect(
+            lambda: desc.setText(get_tpms_kernel(combo.currentData()).description)
+        )
+        return combo, desc
 
     def on_preset_changed(self, preset_name):
         self.apply_preset(preset_name)
@@ -475,44 +472,34 @@ class GyroidGeneratorGUI(QMainWindow):
     def eventFilter(self, watched, event):
         """Intercept drag and drop events on child widgets (e.g. 3D plotter viewport)."""
         if watched == getattr(self, "plotter", None):
-            if event.type() == QEvent.DragEnter:
+            if event.type() == QEvent.Type.DragEnter:
                 self.dragEnterEvent(event)
                 return True
-            elif event.type() == QEvent.DragMove:
+            elif event.type() == QEvent.Type.DragMove:
                 self.dragMoveEvent(event)
                 return True
-            elif event.type() == QEvent.Drop:
+            elif event.type() == QEvent.Type.Drop:
                 self.dropEvent(event)
                 return True
         return super().eventFilter(watched, event)
 
-    def dragEnterEvent(self, event):
-        """Accept drag event if it contains supported file types (.stl or .json)."""
-        if self.progressBar.isVisible():
-            event.ignore()
-            return
-
-        if event.mimeData().hasUrls():
+    def _accept_supported_drag(self, event) -> None:
+        """Accept drag event if idle and mime URLs contain a .stl or .json file."""
+        if not self.progressBar.isVisible() and event.mimeData().hasUrls():
             for url in event.mimeData().urls():
                 path = url.toLocalFile()
                 if path and path.lower().endswith((".stl", ".json")):
                     event.acceptProposedAction()
                     return
         event.ignore()
+
+    def dragEnterEvent(self, event):
+        """Accept drag event if it contains supported file types (.stl or .json)."""
+        self._accept_supported_drag(event)
 
     def dragMoveEvent(self, event):
         """Accept drag movement over valid drop areas."""
-        if self.progressBar.isVisible():
-            event.ignore()
-            return
-
-        if event.mimeData().hasUrls():
-            for url in event.mimeData().urls():
-                path = url.toLocalFile()
-                if path and path.lower().endswith((".stl", ".json")):
-                    event.acceptProposedAction()
-                    return
-        event.ignore()
+        self._accept_supported_drag(event)
 
     def dropEvent(self, event):
         """Handle dropped files (.stl or .json)."""
@@ -552,7 +539,7 @@ class GyroidGeneratorGUI(QMainWindow):
 
         self.stl_path_edit.setText(file_path)
         self.tabs.setCurrentIndex(1)
-        self.statusBar.showMessage(f"Loaded STL: {os.path.basename(file_path)}")
+        self.status_bar.showMessage(f"Loaded STL: {os.path.basename(file_path)}")
 
         try:
             import pyvista as pv
@@ -584,7 +571,7 @@ class GyroidGeneratorGUI(QMainWindow):
                 if idx >= 0:
                     self.param_tpms_combo.setCurrentIndex(idx)
             self.tabs.setCurrentIndex(0)
-            self.statusBar.showMessage(f"Loaded preset: {os.path.basename(file_path)}")
+            self.status_bar.showMessage(f"Loaded preset: {os.path.basename(file_path)}")
         except Exception as e:
             QMessageBox.warning(self, "Invalid Preset", f"Failed to load preset: {e!s}")
 
@@ -605,7 +592,7 @@ class GyroidGeneratorGUI(QMainWindow):
 
             self._gen_start_time = time.perf_counter()
             self.generate_btn.setEnabled(False)
-            self.statusBar.showMessage("Starting parametric generation...")
+            self.status_bar.showMessage("Starting parametric generation...")
             self.progressBar.setVisible(True)
             self.progressBar.setValue(0)
 
@@ -618,7 +605,7 @@ class GyroidGeneratorGUI(QMainWindow):
             self.worker.finished.connect(self.on_generation_finished)
             self.worker.error.connect(self.on_generation_error)
             self.worker.progress.connect(self.progressBar.setValue)
-            self.worker.status.connect(self.statusBar.showMessage)
+            self.worker.status.connect(self.status_bar.showMessage)
             self.worker.start()
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
@@ -666,7 +653,7 @@ class GyroidGeneratorGUI(QMainWindow):
 
             self._gen_start_time = time.perf_counter()
             self.convert_stl_btn.setEnabled(False)
-            self.statusBar.showMessage("Starting STL lattice conversion...")
+            self.status_bar.showMessage("Starting STL lattice conversion...")
             self.progressBar.setVisible(True)
             self.progressBar.setValue(0)
 
@@ -679,7 +666,7 @@ class GyroidGeneratorGUI(QMainWindow):
             self.worker.finished.connect(self.on_generation_finished)
             self.worker.error.connect(self.on_generation_error)
             self.worker.progress.connect(self.progressBar.setValue)
-            self.worker.status.connect(self.statusBar.showMessage)
+            self.worker.status.connect(self.status_bar.showMessage)
             self.worker.start()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Invalid parameters: {e!s}")
@@ -760,7 +747,7 @@ class GyroidGeneratorGUI(QMainWindow):
         self.generator = generator
         elapsed = time.perf_counter() - self._gen_start_time
         n_cells = generator.mesh.n_cells if generator.mesh is not None else 0
-        self.statusBar.showMessage(f"Ready: {n_cells:,} faces generated in {elapsed:.2f}s")
+        self.status_bar.showMessage(f"Ready: {n_cells:,} faces generated in {elapsed:.2f}s")
         self.generate_btn.setEnabled(True)
         self.convert_stl_btn.setEnabled(True)
         self.progressBar.setVisible(False)
@@ -771,7 +758,7 @@ class GyroidGeneratorGUI(QMainWindow):
         self.generate_btn.setEnabled(True)
         self.convert_stl_btn.setEnabled(True)
         self.progressBar.setVisible(False)
-        self.statusBar.showMessage("Operation failed")
+        self.status_bar.showMessage("Operation failed")
 
     def update_stats(self):
         if self.generator and self.generator.mesh:
@@ -799,10 +786,10 @@ class GyroidGeneratorGUI(QMainWindow):
                 case "stl":
                     is_stl_tab = self.tabs.currentIndex() == 1
                     flat_cap = self.stl_cap_check.isChecked() if is_stl_tab else False
-                    self.generator.save_stl(filename, prepare_manifold=True, flat_cap=flat_cap)
+                    self.generator.save_stl(filename, flat_cap=flat_cap)
                 case "obj":
                     self.generator.save_obj(filename)
-            self.statusBar.showMessage(f"Saved to {filename}")
+            self.status_bar.showMessage(f"Saved to {filename}")
 
     def new_project(self):
         self.generator = None
@@ -814,7 +801,7 @@ class GyroidGeneratorGUI(QMainWindow):
         self.show_cav_b_check.setChecked(False)
         self.cutaway_check.setChecked(False)
         self.plotter.clear()
-        self.statusBar.showMessage("New project started")
+        self.status_bar.showMessage("New project started")
 
     def apply_theme(self, theme_name="dark"):
         if theme_name == "dark":

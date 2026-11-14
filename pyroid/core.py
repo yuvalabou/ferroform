@@ -13,7 +13,7 @@ import pyvista as pv
 from pyroid.mesh_utils import (
     convert_stl_to_gyroid,
     export_stl_binary,
-    load_stl,
+    load_trimesh,
     polydata_from_buffers,
     render_offscreen,
 )
@@ -45,7 +45,11 @@ class GyroidGenerator:
         """Validate parameters using the GyroidParams data model."""
         return self.params.validate()
 
-    def generate(self, progress_callback: Callable[[int, str], None] | None = None) -> pv.PolyData:
+    def generate(
+        self,
+        progress_callback: Callable[[int, str], None] | None = None,
+        include_cavities: bool = True,
+    ) -> pv.PolyData:
         """
         Generate the radially symmetrical gyroid/TPMS mesh using current parameters.
 
@@ -61,12 +65,14 @@ class GyroidGenerator:
 
         import pyroid_rs
 
+        params_dict = self.params.to_dict()
+        params_dict["include_cavities"] = include_cavities
         mesh_buf, cav_a_buf, cav_b_buf = pyroid_rs.generate_parametric_tpms(
-            self.params.to_dict(), progress_callback
+            params_dict, progress_callback
         )
         self.mesh = polydata_from_buffers(*mesh_buf)
-        self.cavity_a = polydata_from_buffers(*cav_a_buf)
-        self.cavity_b = polydata_from_buffers(*cav_b_buf)
+        self.cavity_a = polydata_from_buffers(*cav_a_buf) if include_cavities else None
+        self.cavity_b = polydata_from_buffers(*cav_b_buf) if include_cavities else None
 
         return self.mesh
 
@@ -74,6 +80,7 @@ class GyroidGenerator:
         self,
         stl_params: STLConversionParams,
         progress_callback: Callable[[int, str], None] | None = None,
+        include_cavities: bool = True,
     ) -> pv.PolyData:
         """
         Import an STL file and convert its 3D volume into a gyroid lattice.
@@ -92,15 +99,18 @@ class GyroidGenerator:
         if progress_callback:
             progress_callback(5, "Loading STL geometry...")
 
-        tri_mesh, _ = load_stl(stl_params.stl_path)
-        self.mesh = convert_stl_to_gyroid(tri_mesh, stl_params, progress_callback=progress_callback)
+        tri_mesh = load_trimesh(stl_params.stl_path)
+        self.mesh = convert_stl_to_gyroid(
+            tri_mesh,
+            stl_params,
+            progress_callback=progress_callback,
+            include_cavities=include_cavities,
+        )
         self.cavity_a = getattr(self.mesh, "cavity_a", None)
         self.cavity_b = getattr(self.mesh, "cavity_b", None)
         return self.mesh
 
-    def save_stl(
-        self, filename: str, prepare_manifold: bool = True, flat_cap: bool = False
-    ) -> None:
+    def save_stl(self, filename: str, flat_cap: bool = False) -> None:
         """Save the generated mesh as a 3D-printable binary STL file."""
         if self.mesh is None:
             raise ValueError("No mesh has been generated yet")

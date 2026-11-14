@@ -279,10 +279,30 @@ pub fn compute_containment_grid(
 
 /// Compute linear-interpolated `q`-quantile (matching `np.quantile`) over masked values.
 pub fn compute_quantile(values: &[f64], mask: &[bool], q: f64) -> f64 {
+    compute_quantile_mapped(values, mask, q, |v| v)
+}
+
+/// Compute linear-interpolated `q`-quantile over masked `|v|` values without allocating an intermediate `abs` buffer.
+pub fn compute_abs_quantile(values: &[f64], mask: &[bool], q: f64) -> f64 {
+    compute_quantile_mapped(values, mask, q, f64::abs)
+}
+
+fn compute_quantile_mapped(
+    values: &[f64],
+    mask: &[bool],
+    q: f64,
+    map: impl Fn(f64) -> f64,
+) -> f64 {
     let mut masked: Vec<f64> = values
         .iter()
         .zip(mask.iter())
-        .filter_map(|(&v, &m)| if m && !v.is_nan() { Some(v) } else { None })
+        .filter_map(|(&v, &m)| {
+            if m && !v.is_nan() {
+                Some(map(v))
+            } else {
+                None
+            }
+        })
         .collect();
 
     let n = masked.len();

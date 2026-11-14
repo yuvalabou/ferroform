@@ -80,9 +80,8 @@ pub enum GridCoords<'a> {
     },
     Cylindrical {
         rs: &'a [f64],
-        phis: &'a [f64],
+        phi_cs: Vec<(f64, f64)>,
         zs: &'a [f64],
-        ky: f64,
     },
 }
 
@@ -91,7 +90,7 @@ impl<'a> GridCoords<'a> {
     fn dims(&self) -> (usize, usize, usize) {
         match self {
             Self::Cartesian { xs, ys, zs } => (xs.len(), ys.len(), zs.len()),
-            Self::Cylindrical { rs, phis, zs, .. } => (rs.len(), phis.len(), zs.len()),
+            Self::Cylindrical { rs, phi_cs, zs } => (rs.len(), phi_cs.len(), zs.len()),
         }
     }
 
@@ -99,10 +98,10 @@ impl<'a> GridCoords<'a> {
     fn pos(&self, i: usize, j: usize, k: usize) -> [f64; 3] {
         match self {
             Self::Cartesian { xs, ys, zs } => [xs[i], ys[j], zs[k]],
-            Self::Cylindrical { rs, phis, zs, ky } => {
+            Self::Cylindrical { rs, phi_cs, zs } => {
                 let r = rs[i];
-                let angle = phis[j] * ky;
-                [r * angle.cos(), r * angle.sin(), zs[k]]
+                let (c, s) = phi_cs[j];
+                [r * c, r * s, zs[k]]
             }
         }
     }
@@ -137,7 +136,14 @@ pub fn extract_isosurface_cylindrical(
     ky: f64,
     field: &[f64],
 ) -> MeshData {
-    extract_isosurface(&GridCoords::Cylindrical { rs, phis, zs, ky }, field)
+    let phi_cs: Vec<(f64, f64)> = phis
+        .iter()
+        .map(|&phi| {
+            let angle = phi * ky;
+            (angle.cos(), angle.sin())
+        })
+        .collect();
+    extract_isosurface(&GridCoords::Cylindrical { rs, phi_cs, zs }, field)
 }
 
 #[inline]

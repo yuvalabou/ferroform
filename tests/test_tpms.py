@@ -5,7 +5,6 @@ models, and integration in PyRoid.
 import os
 import tempfile
 
-import numpy as np
 import pytest
 import trimesh
 
@@ -41,20 +40,10 @@ def test_tpms_kernels_registry():
     kernels = get_all_tpms_kernels()
     assert len(kernels) == 6
 
-    x = np.linspace(0, 2 * np.pi, 10)
-    X, Y, Z = np.meshgrid(x, x, x, indexing="ij")
-
     for k in kernels:
-        assert k.thickness_multiplier > 0
+        assert k.surface_factor > 0
         assert k.display_name
         assert k.description
-        val = k.eval(X, Y, Z)
-        assert val.shape == (10, 10, 10)
-        assert not np.isnan(val).any()
-        assert not np.isinf(val).any()
-
-        radial_val = k.eval_radial(X, Y, Z)
-        assert radial_val.shape == (10, 10, 10)
 
 
 @pytest.mark.parametrize(

@@ -22,20 +22,18 @@ def polydata_from_buffers(points: np.ndarray, cells: np.ndarray) -> pv.PolyData:
     return pv.PolyData(points, cells)
 
 
-def load_stl(filepath: str) -> tuple[trimesh.Trimesh, pv.PolyData]:
-    """Load an STL file into both Trimesh and PyVista objects."""
+def load_trimesh(filepath: str) -> trimesh.Trimesh:
+    """Load an STL file as a Trimesh object."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"STL file not found: {filepath}")
-
-    tri_mesh = trimesh.load(filepath, force="mesh")
-    pv_mesh = pv.read(filepath)
-    return tri_mesh, pv_mesh
+    return trimesh.load(filepath, force="mesh")
 
 
 def convert_stl_to_gyroid(
     stl_mesh: trimesh.Trimesh,
     params: STLConversionParams,
     progress_callback: Callable[[int, str], None] | None = None,
+    include_cavities: bool = True,
 ) -> pv.PolyData:
     """
     Convert an input STL 3D mesh volume into a gyroid lattice structure.
@@ -49,10 +47,12 @@ def convert_stl_to_gyroid(
     """
     import pyroid_rs
 
+    params_dict = asdict(params)
+    params_dict["include_cavities"] = include_cavities
     is_shell_void, mesh_buf, cav_a_buf, cav_b_buf = pyroid_rs.convert_stl_to_tpms(
         np.asarray(stl_mesh.vertices, dtype=np.float64),
         np.asarray(stl_mesh.faces, dtype=np.uint32),
-        asdict(params),
+        params_dict,
         progress_callback,
     )
 
@@ -234,14 +234,6 @@ def export_stl_binary(
     """
     tri = prepare_for_printing(mesh, flat_cap=flat_cap)
 
-    # Clean any residual degenerate or unreferenced elements
-    if len(tri.faces) > 0:
-        tri.update_faces(tri.nondegenerate_faces())
-        tri.update_faces(tri.unique_faces())
-        tri.remove_unreferenced_vertices()
-        trimesh.repair.fix_winding(tri)
-        trimesh.repair.fix_normals(tri)
-
     # Compute explicit unit normal vectors per face to prevent any zero/NaN vectors in CAM slicers
     v = tri.vertices[tri.faces]
     e1 = v[:, 1] - v[:, 0]
@@ -253,7 +245,6 @@ def export_stl_binary(
     norms[zero_mask] = 1.0
     normals = (normals / norms).astype("<f4")
 
-    vertices = tri.vertices[tri.faces].astype("<f4")
     n_faces = len(tri.faces)
 
     # 80-byte header: valid ASCII, padded with spaces, never starts with 'solid'
@@ -269,9 +260,9 @@ def export_stl_binary(
         ("vertices", "<f4", (3, 3)),
         ("attr", "<u2"),
     ])
-    data = np.zeros(n_faces, dtype=dtype)
+    data = np.empty(n_faces, dtype=dtype)
     data["normals"] = normals
-    data["vertices"] = vertices
+    data["vertices"] = v.astype("<f4")
     data["attr"] = 0
 
     with open(filepath, "wb") as f:

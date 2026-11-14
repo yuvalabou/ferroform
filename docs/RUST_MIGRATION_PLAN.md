@@ -143,9 +143,9 @@ def convert_stl_to_gyroid(stl_mesh, params, progress_callback=None):
 - [x] Verify single-point and radial evaluations via `cargo test` unit tests.
 
 ### Phase 3: Spatial Containment & Euclidean Distance Field
-- [ ] Implement parallel point-in-mesh containment using `parry3d` or AABB ray-traversal with `rayon`.
-- [ ] Implement multithreaded 3D Euclidean Distance Transform (Felzenszwalb-Huttenlocher algorithm) for boundary shell preservation (`shell_thickness`).
-- [ ] Implement fast streaming quantile estimator for automatic `infill_percent` targeting.
+- [x] Implement parallel point-in-mesh containment using `parry3d` or AABB ray-traversal with `rayon`.
+- [x] Implement multithreaded 3D Euclidean Distance Transform (Felzenszwalb-Huttenlocher algorithm) for boundary shell preservation (`shell_thickness`).
+- [x] Implement fast streaming quantile estimator for automatic `infill_percent` targeting.
 
 ### Phase 4: Isosurface Extraction & Industrial Slicing Output
 - [ ] Implement parallel Marching Cubes in Rust yielding indexed triangles.

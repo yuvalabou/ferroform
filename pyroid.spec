@@ -3,9 +3,9 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = []
 binaries = []
-hiddenimports = []
+hiddenimports = ['pyroid_rs']
 
-for package_name in ['pyvista', 'pyvistaqt', 'trimesh', 'qdarkstyle']:
+for package_name in ['pyvista', 'pyvistaqt', 'trimesh', 'qdarkstyle', 'manifold3d']:
     pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(package_name)
     datas += pkg_datas
     binaries += pkg_binaries

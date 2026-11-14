@@ -153,10 +153,10 @@ def convert_stl_to_gyroid(stl_mesh, params, progress_callback=None):
 - [x] Extract watertight internal void isosurface (`void_mesh`) for shell boundary CSG boolean subtraction (`manifold3d`).
 
 ### Phase 5: Python Integration & GUI Verification
-- [ ] Wire PyO3 extension into `pyroid/core.py` and `pyroid/mesh_utils.py`.
-- [ ] Ensure PyQt5 background thread progress bar operates smoothly with Rust callback hooks.
-- [ ] Run full test suite: `uv run pytest -v`.
-- [ ] Test standalone build: `uv run python scripts/release.py`.
+- [x] Wire PyO3 extension into `pyroid/core.py` and `pyroid/mesh_utils.py`.
+- [x] Ensure PyQt5 background thread progress bar operates smoothly with Rust callback hooks.
+- [x] Run full test suite: `uv run pytest -v`.
+- [x] Test standalone build: `uv run python scripts/release.py`.
 
 ### Phase 6: SolidCraft Hooking (Future Target)
 - [x] Expose clean Rust trait in `pyroid-core`:

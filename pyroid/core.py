@@ -8,18 +8,16 @@ from collections.abc import Callable
 from dataclasses import fields
 from typing import Any
 
-import numpy as np
 import pyvista as pv
 
 from pyroid.mesh_utils import (
     convert_stl_to_gyroid,
     export_stl_binary,
     load_stl,
-    prepare_for_printing,
+    polydata_from_buffers,
     render_offscreen,
 )
 from pyroid.models import GyroidParams, STLConversionParams
-from pyroid.tpms import get_tpms_kernel
 
 
 class GyroidGenerator:
@@ -61,59 +59,14 @@ class GyroidGenerator:
         if not is_valid:
             raise ValueError(error)
 
-        p = self.params
-        res = int(p.res)
-        kernel = get_tpms_kernel(p.tpms_type)
+        import pyroid_rs
 
-        if progress_callback:
-            progress_callback(10, f"Initializing cylindrical grid (res={res})...")
-
-        # Generate cylindrical/radial grid domain
-        ky = 2.0 * np.pi / p.b
-        r_aux, phi, z = np.mgrid[0 : p.a : res * 1j, 0 : p.b : res * 1j, 0 : p.c : res * 1j]
-
-        r = (p.r2 - p.r1) / p.a * r_aux + p.r1
-
-        if progress_callback:
-            progress_callback(35, f"Evaluating radial {kernel.display_name} scalar field...")
-
-        # Calculate radial TPMS function values
-        scale_x = 2.0 * np.pi * p.cell_radius / p.a
-        scale_y = 2.0 * np.pi * p.cell_radius / p.b
-        scale_z = 2.0 * np.pi * p.cell_height / p.c
-
-        phi_scaled = phi * p.phi_scale
-        X = r_aux * scale_x
-        Y = phi_scaled * scale_y
-        Z = z * scale_z
-        raw_g = kernel.eval_radial(X, Y, Z) + p.bias
-
-        # Apply radial mask
-        mask = (r >= (p.r1 - p.wall_thickness)) & (r <= p.r1)
-        fun_values = np.where(mask, raw_g, 1.0)
-
-        if progress_callback:
-            progress_callback(60, "Transforming coordinates to Cartesian...")
-
-        # Convert coordinates to Cartesian
-        x = r * np.cos(phi * ky)
-        y = r * np.sin(phi * ky)
-
-        if progress_callback:
-            progress_callback(80, "Extracting isosurface contour...")
-
-        # Build PyVista StructuredGrid and extract isosurface + dual cavities
-        grid = pv.StructuredGrid(x, y, z)
-        grid["vol"] = fun_values.ravel("F")
-        self.mesh = grid.contour([0])
-        t_sheet = 0.2 * (kernel.thickness_multiplier / 4.80)
-        grid["vol"] = np.where(mask, t_sheet - raw_g, 1.0).ravel("F")
-        self.cavity_a = grid.contour([0])
-        grid["vol"] = np.where(mask, raw_g + t_sheet, 1.0).ravel("F")
-        self.cavity_b = grid.contour([0])
-
-        if progress_callback:
-            progress_callback(95, "Finalizing mesh...")
+        mesh_buf, cav_a_buf, cav_b_buf = pyroid_rs.generate_parametric_tpms(
+            self.params.to_dict(), progress_callback
+        )
+        self.mesh = polydata_from_buffers(*mesh_buf)
+        self.cavity_a = polydata_from_buffers(*cav_a_buf)
+        self.cavity_b = polydata_from_buffers(*cav_b_buf)
 
         return self.mesh
 

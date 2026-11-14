@@ -1,8 +1,8 @@
 # PyRoid
 
-**PyRoid** is a high-performance Python application and CLI utility designed to generate radially symmetrical gyroid structures and perform volumetric TPMS infill conversion on arbitrary 3D STL models.
+**PyRoid** is a high-performance Rust-accelerated Python application and CLI utility designed to generate radially symmetrical gyroid structures and perform volumetric TPMS infill conversion on arbitrary 3D STL models.
 
-Equipped with a dual-mode **PyQt5** desktop interface featuring an interactive **PyVista 3D viewport**, a fully scriptable **CLI**, and a standalone **Windows executable**, PyRoid caters to additive manufacturing (SLS/SLA/FDM), computational design, and material research workflows.
+Powered by a multithreaded Rust computational geometry core (`pyroid-core` exposed via PyO3/Maturin as `pyroid_rs`), a dual-mode **PyQt5** desktop interface featuring an interactive **PyVista 3D viewport**, a fully scriptable **CLI**, and a standalone **Windows executable**, PyRoid caters to additive manufacturing (SLS/SLA/FDM), computational design, and material research workflows.
 
 ---
 
@@ -22,16 +22,17 @@ Equipped with a dual-mode **PyQt5** desktop interface featuring an interactive *
 
 ## Installation
 
-PyRoid uses [`uv`](https://github.com/astral-sh/uv) for fast, deterministic dependency and environment management.
+PyRoid uses [`uv`](https://github.com/astral-sh/uv) and the Rust toolchain (`cargo` / `maturin`) to compile the native `pyroid_rs` extension and manage dependencies.
 
 ```bash
 # Clone the repository
 git clone https://github.com/your-username/pyroid.git
 cd pyroid
 
-# Initialize environment and install all dependencies
+# Initialize environment, compile Rust backend, and install all dependencies
 uv venv
 uv sync --all-extras
+uv run maturin develop --release
 ```
 
 ---
@@ -110,32 +111,38 @@ uv run python scripts/release.py --install-git-hook
 
 ```gfm
 pyroid/
+├── Cargo.toml                  # Cargo workspace manifest
+├── Cargo.lock                  # Deterministic Rust dependency lockfile
+├── crates/
+│   ├── pyroid-core/            # Pure Rust TPMS, BVH ray-casting, 3D EDT, Marching Cubes
+│   └── pyroid-pyo3/            # PyO3/Maturin bindings exposing pyroid_rs
 ├── pyroid/
-│   ├── core.py         # Main GyroidGenerator class & math pipeline
-│   ├── models.py       # GyroidParams & STLConversionParams dataclasses
-│   ├── mesh_utils.py   # STL loading, volumetric ray containment, watertight repair
-│   ├── cli.py          # Command Line Interface (pyroid-cli)
-│   └── gui.py          # PyQt5 dual-mode GUI & PyVistaQt interactor
+│   ├── core.py                 # GyroidGenerator forwarding parametric/STL builds to pyroid_rs
+│   ├── models.py               # GyroidParams & STLConversionParams dataclasses
+│   ├── mesh_utils.py           # pyroid_rs infill bridge, manifold3d shell subtraction, STL export
+│   ├── cli.py                  # Command Line Interface (pyroid-cli)
+│   └── gui.py                  # PyQt5 dual-mode GUI & PyVistaQt interactor
 ├── scripts/
-│   ├── release.py      # Automated executable release & watch pipeline
-│   └── build_release.bat # Windows convenience runner
+│   ├── release.py              # Automated executable release & watch pipeline
+│   └── build_release.bat       # Windows convenience runner
 ├── .agents/skills/
 │   └── release-executable/SKILL.md # Antigravity release agent skill
-├── tests/              # Automated pytest test suite
-├── AGENTS.md           # Developer & AI Agent contribution guide
-├── pyproject.toml      # Modern PEP 621 package metadata & uv overrides
-├── pyroid.spec         # PyInstaller build specification
-├── uv.lock             # Deterministic uv lockfile
-└── main.py             # Entry point launcher
+├── tests/                      # Automated pytest test suite
+├── AGENTS.md                   # Developer & AI Agent contribution guide
+├── pyproject.toml              # PEP 621 maturin build config & uv overrides
+├── pyroid.spec                 # PyInstaller build specification
+├── uv.lock                     # Deterministic uv lockfile
+└── main.py                     # Entry point launcher
 ```
 
 ---
 
 ## Running Tests
 
-Run the test suite using `uv`:
+Run the Rust core and Python integration test suites:
 
 ```bash
+cargo test --workspace
 uv run pytest -v
 ```
 

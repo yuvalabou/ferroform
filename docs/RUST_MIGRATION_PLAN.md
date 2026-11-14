@@ -48,45 +48,77 @@ PyVista does not need complex Python objects passed back from Rust. It only requ
 
 ### Rust Handoff Example (`pyroid-pyo3/src/lib.rs`):
 ```rust
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
-use numpy::{IntoPyArray, PyArray1, PyArray2};
-use pyroid_core::{TPMSEngine, STLParams};
+use pyo3::types::PyDict;
+
+type MeshTuple<'py> = (Bound<'py, PyArray2<f32>>, Bound<'py, PyArray1<i64>>);
 
 #[pyfunction]
 fn convert_stl_to_tpms<'py>(
     py: Python<'py>,
-    stl_path: &str,
-    params: &Bound<'py, PyAny>,
-) -> PyResult<(Bound<'py, PyArray2<f32>>, Bound<'py, PyArray1<i64>>)> {
-    // 1. Parse Python parameters
-    let rust_params = parse_params(params)?;
+    vertices: PyReadonlyArray2<'py, f64>,
+    faces: PyReadonlyArray2<'py, u32>,
+    params: &Bound<'py, PyDict>,
+    progress_callback: Option<PyObject>,
+) -> PyResult<(bool, MeshTuple<'py>, Option<MeshTuple<'py>>, Option<MeshTuple<'py>>)> {
+    // 1. Parse Python parameters & mesh buffers
+    let rust_params = parse_stl_params(params)?;
+    let (verts, tris) = extract_mesh_buffers(vertices, faces)?;
 
-    // 2. Compute in pure Rust releasing GIL
-    let mesh = py.allow_threads(|| {
-        pyroid_core::convert_stl(stl_path, &rust_params)
-    }).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+    // 2. Compute in pure Rust releasing GIL (briefly re-acquiring GIL between stages for progress)
+    let out = py
+        .allow_threads(|| pyroid_core::convert_stl(&verts, &tris, &rust_params, |pct, msg| {
+            if let Some(cb) = &progress_callback {
+                Python::with_gil(|py| { let _ = cb.call1(py, (pct, msg)); });
+            }
+        }))
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
 
-    // 3. Zero-copy transfer to Python NumPy arrays
-    let py_points = mesh.points_flat().into_pyarray_bound(py).reshape([mesh.n_points(), 3])?;
-    let py_faces = mesh.vtk_cells().into_pyarray_bound(py);
-
-    Ok((py_points, py_faces))
+    // 3. Zero-copy transfer to Python NumPy arrays (primary mesh + cavity_a / cavity_b)
+    Ok((
+        out.is_shell_void,
+        mesh_to_py(py, out.mesh)?,
+        out.cavity_a.map(|m| mesh_to_py(py, m)).transpose()?,
+        out.cavity_b.map(|m| mesh_to_py(py, m)).transpose()?,
+    ))
 }
 ```
 
 ### Python Consumption (`pyroid/mesh_utils.py`):
 ```python
+from dataclasses import asdict
+import numpy as np
 import pyvista as pv
 import pyroid_rs
 
 def convert_stl_to_gyroid(stl_mesh, params, progress_callback=None):
-    # Rust generates vertices and VTK cells in parallel with GIL released
-    points, cells = pyroid_rs.convert_stl_to_tpms(params.stl_path, params.to_dict())
-    
-    # Instantaneous PyVista construction (zero copying)
-    poly = pv.PolyData(points, cells)
-    return poly
+    is_shell_void, mesh_buf, cav_a_buf, cav_b_buf = pyroid_rs.convert_stl_to_tpms(
+        np.asarray(stl_mesh.vertices, dtype=np.float64),
+        np.asarray(stl_mesh.faces, dtype=np.uint32),
+        asdict(params),
+        progress_callback,
+    )
+    # Instantaneous PyVista construction (or manifold3d boolean subtraction when is_shell_void=True)
+    ...
 ```
+
+---
+
+## 2.5 Implementation Contracts & Edge Cases
+
+1. **Dual Cavities (`cavity_a`, `cavity_b`):**
+   Both parametric generation and STL sheet conversion (`is_skeletal=False`) must extract and return `(wall_mesh, cavity_a, cavity_b)` in a single pass over the evaluated scalar field so `gui.py`, `test_tpms.py`, and `test_mesh_utils.py` work seamlessly.
+2. **Preserved Shell Exact CAD Vertices (`< 1e-4` tolerance):**
+   When `preserve_shell=True`, `pyroid-core` computes the parallel 3D Euclidean Distance Transform (`dist_inside`) and extracts the welded internal void isosurface (`max(shell_thickness - dist_inside, void_scalar) = 0`) with positive outward signed volume. Python then subtracts `m_void` from the exact outer CAD mesh (`m_outer - m_void` via `manifold3d`), preserving original CAD boundary vertices (`< 1e-4`) and watertight internal slicing holes.
+3. **Marching Cubes Vertex Welding & Boundary Closure:**
+   Grid-edge vertices `(i, j, k, axis)` are deduplicated during Marching Cubes and exterior voxels are clamped to `1.0` so extracted meshes are closed, 2-manifold (`is_watertight == True`), free of degenerate triangles, and report accurate `mesh.volume`.
+4. **Progress Callback GIL Contract:**
+   While releasing the GIL (`py.allow_threads`) during heavy Rayon computation, `pyroid-pyo3` briefly re-acquires `Python::with_gil` between pipeline stages to emit monotonically non-decreasing `(percent, message)` updates containing the expected stage keywords (`"grid"`, `"containment"`, `"isosurface"`).
+5. **Parametric Curvi-Cylindrical Mapping & Gyroid Radial Kernel:**
+   `Gyroid` uses `cos(X)*sin(Y) + cos(Y)*sin(Z) + cos(Z)*sin(X)` for radial evaluation while the other 5 TPMS kernels reuse their Cartesian formula. Parametric Marching Cubes interpolates edge vertices across the curvi-cylindrical `(r * cos(phi * ky), r * sin(phi * ky), z)` grid and contours the zero-level surface `raw_g = 0`.
+6. **Packaging (`pyproject.toml` & `pyroid.spec`):**
+   `pyproject.toml` configures `maturin` to compile `pyroid_rs` alongside the `pyroid` Python package, and `pyroid.spec` includes `pyroid_rs` in `hiddenimports` so standalone PyInstaller releases bundle the compiled extension.
 
 ---
 

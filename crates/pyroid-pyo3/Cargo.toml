@@ -1,0 +1,14 @@
+[package]
+name = "pyroid-pyo3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "pyroid_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyroid-core = { path = "../pyroid-core" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+numpy = "0.22"

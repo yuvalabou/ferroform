@@ -125,15 +125,15 @@ def convert_stl_to_gyroid(stl_mesh, params, progress_callback=None):
 ## 3. Migration Roadmap & Execution Checklist
 
 ### Phase 1: Build System & Workspace Setup
-- [ ] Create `Cargo.toml` at repository root configured for multi-crate workspace.
-- [ ] Initialize `crates/pyroid-core` and `crates/pyroid-pyo3`.
-- [ ] Switch `pyproject.toml` to `maturin`:
+- [x] Create `Cargo.toml` at repository root configured for multi-crate workspace.
+- [x] Initialize `crates/pyroid-core` and `crates/pyroid-pyo3`.
+- [x] Switch `pyproject.toml` to `maturin`:
   ```toml
   [build-system]
   requires = ["maturin>=1.5,<2.0"]
   build-backend = "maturin"
   ```
-- [ ] Verify local dev setup: `uv pip install maturin && maturin develop`.
+- [x] Verify local dev setup: `uv pip install maturin && maturin develop`.
 
 ### Phase 2: `pyroid-core` Geometric Kernels
 - [ ] Port `pyroid/tpms.py` mathematical equations into `crates/pyroid-core/src/tpms.rs`:

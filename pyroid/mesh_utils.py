@@ -9,17 +9,24 @@ from collections.abc import Callable
 from dataclasses import asdict
 
 import numpy as np
+import pyroid_rs
 import pyvista as pv
 import trimesh
 
 from pyroid.models import STLConversionParams
 
 
-def polydata_from_buffers(points: np.ndarray, cells: np.ndarray) -> pv.PolyData:
+def polydata_from_buffers(
+    points: np.ndarray, cells: np.ndarray, *, rust_manifold: bool = False
+) -> pv.PolyData:
     """Construct a PyVista PolyData mesh from zero-copy Rust vertex and VTK cell buffers."""
     if len(points) == 0 or len(cells) == 0:
-        return pv.PolyData()
-    return pv.PolyData(points, cells)
+        mesh = pv.PolyData()
+    else:
+        mesh = pv.PolyData(points, cells)
+    if rust_manifold:
+        pv.set_new_attribute(mesh, "_rust_manifold", True)
+    return mesh
 
 
 def load_trimesh(filepath: str) -> trimesh.Trimesh:
@@ -45,8 +52,6 @@ def convert_stl_to_gyroid(
     Returns:
         PyVista PolyData object representing the generated gyroid mesh within the STL boundary.
     """
-    import pyroid_rs
-
     params_dict = asdict(params)
     params_dict["include_cavities"] = include_cavities
     is_shell_void, mesh_buf, cav_a_buf, cav_b_buf = pyroid_rs.convert_stl_to_tpms(
@@ -111,7 +116,7 @@ def convert_stl_to_gyroid(
 
         return _attach_cavities(pv.wrap(tri_result))
 
-    mesh = polydata_from_buffers(*mesh_buf)
+    mesh = polydata_from_buffers(*mesh_buf, rust_manifold=True)
     return _attach_cavities(mesh)
 
 
@@ -232,6 +237,21 @@ def export_stl_binary(
       - 50 bytes per facet with valid, normalized non-zero unit normals.
       - Watertight topology, consistent counter-clockwise face winding, no degenerate facets.
     """
+    if (
+        not flat_cap
+        and isinstance(mesh, pv.PolyData)
+        and getattr(mesh, "_rust_manifold", False)
+        and (mesh.n_cells == 0 or mesh.faces.size == mesh.n_cells * 4)
+    ):
+        if mesh.n_cells == 0:
+            pts = np.empty((0, 3), dtype=np.float32)
+            tris = np.empty((0, 3), dtype=np.uint32)
+        else:
+            pts = np.ascontiguousarray(mesh.points, dtype=np.float32)
+            tris = np.ascontiguousarray(mesh.faces.reshape((-1, 4))[:, 1:], dtype=np.uint32)
+        pyroid_rs.write_stl_binary(pts, tris, filepath, header_text)
+        return
+
     tri = prepare_for_printing(mesh, flat_cap=flat_cap)
 
     # Compute explicit unit normal vectors per face to prevent any zero/NaN vectors in CAM slicers

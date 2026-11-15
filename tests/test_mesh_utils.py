@@ -1,9 +1,11 @@
 """Unit tests for mesh processing utilities and STL infill conversion."""
 
 import numpy as np
+import pyroid_rs
 import pyvista as pv
 import trimesh
 
+from pyroid import mesh_utils
 from pyroid.mesh_utils import (
     convert_stl_to_gyroid,
     export_stl_binary,
@@ -250,3 +252,46 @@ def test_parametric_export_buildstar_compatibility(tmp_path):
     norms = np.linalg.norm(loaded.face_normals, axis=1)
     np.testing.assert_allclose(norms, 1.0, atol=1e-3)
     assert not np.isnan(loaded.face_normals).any()
+
+
+def test_direct_rust_stl_writer_fast_path(tmp_path, monkeypatch):
+    # Direct pyroid_rs.write_stl_binary test (with "solid" header guard & inverted winding)
+    pts = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float32,
+    )
+    tris = np.array([[0, 1, 2], [0, 3, 1], [1, 3, 2], [2, 3, 0]], dtype=np.uint32)
+    direct_stl = str(tmp_path / "direct_rust.stl")
+    pyroid_rs.write_stl_binary(pts, tris, direct_stl, "solid test")
+
+    with open(direct_stl, "rb") as f:
+        hdr = f.read(80)
+    assert not hdr.lower().startswith(b"solid")
+    assert hdr.startswith(b"PyRoid solid test")
+
+    loaded_tet = trimesh.load(direct_stl, force="mesh")
+    assert loaded_tet.is_watertight
+    assert loaded_tet.volume > 0
+
+    # Verify export_stl_binary bypasses prepare_for_printing when flat_cap=False & preserve_shell=False
+    cube = trimesh.creation.box(extents=[10, 10, 10])
+    in_stl = str(tmp_path / "in_cube_fast.stl")
+    out_stl = str(tmp_path / "out_fast.stl")
+    cube.export(in_stl)
+
+    tri_mesh = load_trimesh(in_stl)
+    params = STLConversionParams(
+        stl_path=in_stl, resolution=25, cell_size=4.0, wall_thickness=0.6
+    )
+    mesh = convert_stl_to_gyroid(tri_mesh, params)
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("prepare_for_printing should be bypassed on Rust fast path")
+
+    monkeypatch.setattr(mesh_utils, "prepare_for_printing", _fail_if_called)
+    export_stl_binary(mesh, out_stl, flat_cap=False)
+
+    loaded = trimesh.load(out_stl, force="mesh")
+    assert loaded.is_watertight
+    assert loaded.is_winding_consistent
+    assert (loaded.area_faces < 1e-12).sum() == 0

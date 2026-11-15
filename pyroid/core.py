@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import fields
 from typing import Any
 
+import pyroid_rs
 import pyvista as pv
 
 from pyroid.mesh_utils import (
@@ -63,14 +64,12 @@ class GyroidGenerator:
         if not is_valid:
             raise ValueError(error)
 
-        import pyroid_rs
-
         params_dict = self.params.to_dict()
         params_dict["include_cavities"] = include_cavities
         mesh_buf, cav_a_buf, cav_b_buf = pyroid_rs.generate_parametric_tpms(
             params_dict, progress_callback
         )
-        self.mesh = polydata_from_buffers(*mesh_buf)
+        self.mesh = polydata_from_buffers(*mesh_buf, rust_manifold=True)
         self.cavity_a = polydata_from_buffers(*cav_a_buf) if include_cavities else None
         self.cavity_b = polydata_from_buffers(*cav_b_buf) if include_cavities else None
 

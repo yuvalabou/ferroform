@@ -1,9 +1,12 @@
 //! PyO3 Python bindings exposing `pyroid_core` as the `pyroid_rs` extension module.
 
+use std::path::Path;
+
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray2};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use pyroid_core::manifold::{write_binary_stl_slices, DEFAULT_STL_HEADER};
 use pyroid_core::marching::MeshData;
 use pyroid_core::tpms::TpmsType;
 use pyroid_core::{convert_stl, generate_parametric, ParametricParams, StlParams};
@@ -149,9 +152,47 @@ fn convert_stl_to_tpms<'py>(
     ))
 }
 
+/// Write triangle mesh buffers directly to a standard-compliant binary STL file.
+#[pyfunction]
+#[pyo3(signature = (points, faces, filepath, header_text=None))]
+fn write_stl_binary<'py>(
+    py: Python<'py>,
+    points: PyReadonlyArray2<'py, f32>,
+    faces: PyReadonlyArray2<'py, u32>,
+    filepath: &str,
+    header_text: Option<&str>,
+) -> PyResult<()> {
+    let p_arr = points.as_array();
+    let f_arr = faces.as_array();
+    if p_arr.ncols() != 3 || f_arr.ncols() != 3 {
+        return Err(PyValueError::new_err(
+            "points and faces must have shape (N, 3)",
+        ));
+    }
+
+    let pts: Vec<[f32; 3]> = if let Some(s) = p_arr.as_slice() {
+        s.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+    } else {
+        p_arr.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect()
+    };
+
+    let tris: Vec<[u32; 3]> = if let Some(s) = f_arr.as_slice() {
+        s.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+    } else {
+        f_arr.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect()
+    };
+
+    let header = header_text.unwrap_or(DEFAULT_STL_HEADER).to_string();
+    let path = Path::new(filepath).to_path_buf();
+
+    py.allow_threads(|| write_binary_stl_slices(&pts, &tris, &path, &header))
+        .map_err(PyIOError::new_err)
+}
+
 #[pymodule]
 fn pyroid_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(generate_parametric_tpms, m)?)?;
     m.add_function(wrap_pyfunction!(convert_stl_to_tpms, m)?)?;
+    m.add_function(wrap_pyfunction!(write_stl_binary, m)?)?;
     Ok(())
 }

@@ -53,7 +53,14 @@ def test_mesh_statistics():
     assert "n_cells" in stats
     assert "volume" in stats
     assert "surface_area" in stats
+    assert "porosity_pct" in stats
+    assert "sa_to_vol_ratio" in stats
+    assert "n_open_edges" in stats
+    assert "is_watertight" in stats
     assert stats["n_points"] > 0
+    assert 0.0 <= stats["porosity_pct"] <= 100.0
+    assert stats["sa_to_vol_ratio"] > 0.0
+    assert isinstance(stats["is_watertight"], bool)
 
 
 def test_gyroid_generation_progress_callback():

@@ -4,6 +4,7 @@ Contains GyroidGenerator for computing parametric gyroid surfaces in cylindrical
 coordinates and coordinating STL mesh infill conversions.
 """
 
+import math
 from collections.abc import Callable
 from dataclasses import fields
 from typing import Any
@@ -41,6 +42,7 @@ class GyroidGenerator:
         self.mesh: pv.PolyData | None = None
         self.cavity_a: pv.PolyData | None = None
         self.cavity_b: pv.PolyData | None = None
+        self._reference_volume: float | None = None
 
     def validate_params(self) -> tuple[bool, str]:
         """Validate parameters using the GyroidParams data model."""
@@ -72,6 +74,11 @@ class GyroidGenerator:
         self.mesh = polydata_from_buffers(*mesh_buf, rust_manifold=True)
         self.cavity_a = polydata_from_buffers(*cav_a_buf) if include_cavities else None
         self.cavity_b = polydata_from_buffers(*cav_b_buf) if include_cavities else None
+        r_inner = max(0.0, self.params.r1 - self.params.wall_thickness)
+        r_outer = self.params.r1
+        self._reference_volume = (
+            math.pi * max(0.0, r_outer**2 - r_inner**2) * self.params.c
+        )
 
         return self.mesh
 
@@ -99,6 +106,7 @@ class GyroidGenerator:
             progress_callback(5, "Loading STL geometry...")
 
         tri_mesh = load_trimesh(stl_params.stl_path)
+        self._reference_volume = float(abs(tri_mesh.volume))
         self.mesh = convert_stl_to_gyroid(
             tri_mesh,
             stl_params,
@@ -134,15 +142,30 @@ class GyroidGenerator:
         render_offscreen(self.mesh, filename)
 
     def get_mesh_stats(self) -> dict[str, Any]:
-        """Return quantitative mesh metrics."""
+        """Return quantitative mesh and manufacturability metrics."""
         if self.mesh is None:
             raise ValueError("No mesh has been generated yet")
+
+        volume = float(self.mesh.volume)
+        surface_area = float(self.mesh.area)
+        sa_to_vol_ratio = (surface_area / volume) if volume > 0.0 else 0.0
+        n_open_edges = int(self.mesh.n_open_edges)
+        is_watertight = n_open_edges == 0 and self.mesh.n_cells > 0
+
+        porosity_pct: float | None = None
+        if self._reference_volume is not None and self._reference_volume > 0.0:
+            raw_porosity = (1.0 - (volume / self._reference_volume)) * 100.0
+            porosity_pct = max(0.0, min(100.0, raw_porosity))
 
         return {
             "n_points": self.mesh.n_points,
             "n_cells": self.mesh.n_cells,
-            "volume": self.mesh.volume,
-            "surface_area": self.mesh.area,
+            "volume": volume,
+            "surface_area": surface_area,
+            "porosity_pct": porosity_pct,
+            "sa_to_vol_ratio": sa_to_vol_ratio,
+            "n_open_edges": n_open_edges,
+            "is_watertight": is_watertight,
         }
 
     @classmethod

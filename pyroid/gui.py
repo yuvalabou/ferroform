@@ -10,7 +10,7 @@ import sys
 import time
 
 import qdarkstyle
-from PyQt5.QtCore import QEvent, QThread, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -25,12 +25,14 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSlider,
     QStatusBar,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 from pyvistaqt import QtInteractor
+from vtkmodules.vtkCommonDataModel import vtkPlane
 
 from pyroid.core import GyroidGenerator
 from pyroid.models import GyroidParams, STLConversionParams
@@ -70,6 +72,8 @@ class GyroidGeneratorGUI(QMainWindow):
         self.generator: GyroidGenerator | None = None
         self.current_preset = "default"
         self._gen_start_time = 0.0
+        self._clip_plane = vtkPlane()
+        self._mesh_actors = []
 
         self.init_ui()
         self.apply_preset(self.current_preset)
@@ -349,10 +353,31 @@ class GyroidGeneratorGUI(QMainWindow):
         cav_row.addWidget(self.show_cav_b_check)
         view_layout.addLayout(cav_row)
 
-        self.cutaway_check = QCheckBox("Show Cross-Section (Cutaway)")
-        self.cutaway_check.setToolTip("Slice mesh along X-axis to inspect internal gyroid infill")
-        self.cutaway_check.toggled.connect(self.on_view_mode_changed)
-        view_layout.addWidget(self.cutaway_check)
+        slice_row = QHBoxLayout()
+        self.slice_enable_check = QCheckBox("Slice Plane:")
+        self.slice_enable_check.setToolTip(
+            "Clip mesh along an interactive X/Y/Z plane to inspect internal lattice"
+        )
+        self.slice_enable_check.toggled.connect(self.on_slice_toggled)
+        self.slice_axis_combo = QComboBox()
+        self.slice_axis_combo.addItems(["X", "Y", "Z"])
+        self.slice_axis_combo.setEnabled(False)
+        self.slice_axis_combo.currentIndexChanged.connect(self.on_slice_changed)
+        self.slice_pos_label = QLabel("50%")
+        slice_row.addWidget(self.slice_enable_check)
+        slice_row.addWidget(self.slice_axis_combo)
+        slice_row.addStretch()
+        slice_row.addWidget(self.slice_pos_label)
+        view_layout.addLayout(slice_row)
+
+        self.slice_slider = QSlider(Qt.Horizontal)
+        self.slice_slider.setRange(0, 100)
+        self.slice_slider.setValue(50)
+        self.slice_slider.setEnabled(False)
+        self.slice_slider.setToolTip("Adjust slice plane position across mesh bounds")
+        self.slice_slider.valueChanged.connect(self.on_slice_changed)
+        view_layout.addWidget(self.slice_slider)
+
         left_layout.addWidget(view_box)
         self.tabs.currentChanged.connect(self.on_skeletal_toggled)
 
@@ -364,6 +389,9 @@ class GyroidGeneratorGUI(QMainWindow):
             "n_cells": QLabel("Cells: -"),
             "volume": QLabel("Volume: -"),
             "surface_area": QLabel("Surface Area: -"),
+            "porosity": QLabel("Porosity: -"),
+            "sa_to_vol": QLabel("Surface/Volume: -"),
+            "watertight": QLabel("Watertight: -"),
         }
         for label in self.stats_labels.values():
             stats_layout.addWidget(label)
@@ -693,17 +721,62 @@ class GyroidGeneratorGUI(QMainWindow):
 
     def on_view_mode_changed(self):
         if self.generator and self.generator.mesh:
-            self.render_current_mesh()
+            self.render_current_mesh(reset_camera=False, refresh_stats=False)
 
-    def _clip_if_enabled(self, mesh, origin):
-        if not self.cutaway_check.isChecked() or mesh is None or mesh.n_points == 0:
-            return mesh
-        try:
-            return mesh.clip(normal="x", origin=origin)
-        except Exception:
-            return mesh
+    def on_slice_toggled(self, checked: bool):
+        self.slice_axis_combo.setEnabled(checked)
+        self.slice_slider.setEnabled(checked)
+        self._update_slice_label()
+        self._apply_clip_plane()
+        if self.generator and self.generator.mesh:
+            self.plotter.render()
 
-    def render_current_mesh(self):
+    def on_slice_changed(self):
+        self._update_slice_label()
+        self._apply_clip_plane()
+        if self.generator and self.generator.mesh:
+            self.plotter.render()
+
+    def _get_slice_plane(self) -> tuple[tuple[float, float, float], list[float], float] | None:
+        if self.generator is None or self.generator.mesh is None or self.generator.mesh.n_points == 0:
+            return None
+        axis_idx = self.slice_axis_combo.currentIndex()
+        normals = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        bounds = self.generator.mesh.bounds
+        b_min, b_max = bounds[2 * axis_idx], bounds[2 * axis_idx + 1]
+        t = self.slice_slider.value() / 100.0
+        coord = b_min + t * (b_max - b_min)
+        origin = list(self.generator.mesh.center)
+        origin[axis_idx] = coord
+        return normals[axis_idx], origin, coord
+
+    def _update_slice_label(self):
+        pct = self.slice_slider.value()
+        plane = self._get_slice_plane()
+        if plane is not None:
+            _, _, coord = plane
+            self.slice_pos_label.setText(f"{pct}% ({coord:.2f})")
+        else:
+            self.slice_pos_label.setText(f"{pct}%")
+
+    def _apply_clip_plane(self):
+        plane = self._get_slice_plane()
+        enabled = self.slice_enable_check.isChecked() and plane is not None
+        if enabled:
+            normal, origin, _ = plane
+            self._clip_plane.SetNormal(*normal)
+            self._clip_plane.SetOrigin(*origin)
+
+        for actor in self._mesh_actors:
+            mapper = getattr(actor, "mapper", None)
+            if mapper is None:
+                continue
+            mapper.RemoveAllClippingPlanes()
+            if enabled:
+                mapper.AddClippingPlane(self._clip_plane)
+
+    def render_current_mesh(self, reset_camera: bool = True, refresh_stats: bool = True):
+        self._mesh_actors.clear()
         self.plotter.clear()
         if self.generator is None or self.generator.mesh is None:
             return
@@ -716,31 +789,40 @@ class GyroidGeneratorGUI(QMainWindow):
             )
             return
 
-        origin = self.generator.mesh.center
+        self._update_slice_label()
         show_cavs = self.show_cav_a_check.isChecked() or self.show_cav_b_check.isChecked()
 
         if self.show_wall_check.isChecked():
-            wall = self._clip_if_enabled(self.generator.mesh, origin)
-            if wall is not None and wall.n_points > 0:
-                if show_cavs:
-                    self.plotter.add_mesh(wall, color="#cccccc", opacity=0.25)
-                else:
-                    self.plotter.add_mesh(wall, scalars=wall.points[:, -1], show_scalar_bar=False)
+            wall = self.generator.mesh
+            if show_cavs:
+                actor = self.plotter.add_mesh(wall, color="#cccccc", opacity=0.25)
+            else:
+                actor = self.plotter.add_mesh(
+                    wall, scalars=wall.points[:, -1], show_scalar_bar=False
+                )
+            self._mesh_actors.append(actor)
 
         if self.show_cav_a_check.isChecked() and self.generator.cavity_a is not None:
-            cav_a = self._clip_if_enabled(self.generator.cavity_a, origin)
-            if cav_a is not None and cav_a.n_points > 0:
-                self.plotter.add_mesh(cav_a, color="#e74c3c", opacity=0.85)
+            cav_a = self.generator.cavity_a
+            if cav_a.n_points > 0:
+                self._mesh_actors.append(
+                    self.plotter.add_mesh(cav_a, color="#e74c3c", opacity=0.85)
+                )
 
         if self.show_cav_b_check.isChecked() and self.generator.cavity_b is not None:
-            cav_b = self._clip_if_enabled(self.generator.cavity_b, origin)
-            if cav_b is not None and cav_b.n_points > 0:
-                self.plotter.add_mesh(cav_b, color="#3498db", opacity=0.85)
+            cav_b = self.generator.cavity_b
+            if cav_b.n_points > 0:
+                self._mesh_actors.append(
+                    self.plotter.add_mesh(cav_b, color="#3498db", opacity=0.85)
+                )
 
+        self._apply_clip_plane()
         self.plotter.add_bounding_box()
         self.plotter.show_axes()
-        self.plotter.reset_camera()
-        self.update_stats()
+        if reset_camera:
+            self.plotter.reset_camera()
+        if refresh_stats:
+            self.update_stats()
         self.stats_box.setVisible(True)
 
     def on_generation_finished(self, generator: GyroidGenerator):
@@ -769,6 +851,18 @@ class GyroidGeneratorGUI(QMainWindow):
             self.stats_labels["surface_area"].setText(
                 f"Surface Area: {stats['surface_area']:.2f} square units"
             )
+            porosity = stats.get("porosity_pct")
+            porosity_str = f"{porosity:.1f}%" if porosity is not None else "-"
+            self.stats_labels["porosity"].setText(f"Porosity: {porosity_str}")
+            self.stats_labels["sa_to_vol"].setText(
+                f"Surface/Volume: {stats['sa_to_vol_ratio']:.3f} unit\u207b\u00b9"
+            )
+            if stats["is_watertight"]:
+                self.stats_labels["watertight"].setText("Watertight: Yes (0 open edges)")
+            else:
+                self.stats_labels["watertight"].setText(
+                    f"Watertight: No ({stats['n_open_edges']:,} open edges)"
+                )
 
     def save_mesh(self, file_type):
         if not self.generator or not self.generator.mesh:
@@ -793,13 +887,17 @@ class GyroidGeneratorGUI(QMainWindow):
 
     def new_project(self):
         self.generator = None
+        self._mesh_actors.clear()
         self.stats_box.setVisible(False)
         self.apply_preset("default")
         self.stl_shell_check.setChecked(False)
         self.show_wall_check.setChecked(True)
         self.show_cav_a_check.setChecked(False)
         self.show_cav_b_check.setChecked(False)
-        self.cutaway_check.setChecked(False)
+        self.slice_enable_check.setChecked(False)
+        self.slice_axis_combo.setCurrentIndex(0)
+        self.slice_slider.setValue(50)
+        self._update_slice_label()
         self.plotter.clear()
         self.status_bar.showMessage("New project started")
 

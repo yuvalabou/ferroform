@@ -363,9 +363,14 @@ class GyroidGeneratorGUI(QMainWindow):
         self.slice_axis_combo.addItems(["X", "Y", "Z"])
         self.slice_axis_combo.setEnabled(False)
         self.slice_axis_combo.currentIndexChanged.connect(self.on_slice_changed)
+        self.slice_reverse_check = QCheckBox("Reverse")
+        self.slice_reverse_check.setToolTip("Flip which side of the slice plane is clipped")
+        self.slice_reverse_check.setEnabled(False)
+        self.slice_reverse_check.toggled.connect(self.on_slice_changed)
         self.slice_pos_label = QLabel("50%")
         slice_row.addWidget(self.slice_enable_check)
         slice_row.addWidget(self.slice_axis_combo)
+        slice_row.addWidget(self.slice_reverse_check)
         slice_row.addStretch()
         slice_row.addWidget(self.slice_pos_label)
         view_layout.addLayout(slice_row)
@@ -725,6 +730,7 @@ class GyroidGeneratorGUI(QMainWindow):
 
     def on_slice_toggled(self, checked: bool):
         self.slice_axis_combo.setEnabled(checked)
+        self.slice_reverse_check.setEnabled(checked)
         self.slice_slider.setEnabled(checked)
         self._update_slice_label()
         self._apply_clip_plane()
@@ -741,7 +747,8 @@ class GyroidGeneratorGUI(QMainWindow):
         if self.generator is None or self.generator.mesh is None or self.generator.mesh.n_points == 0:
             return None
         axis_idx = self.slice_axis_combo.currentIndex()
-        normals = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        sign = -1.0 if self.slice_reverse_check.isChecked() else 1.0
+        normals = ((sign, 0.0, 0.0), (0.0, sign, 0.0), (0.0, 0.0, sign))
         bounds = self.generator.mesh.bounds
         b_min, b_max = bounds[2 * axis_idx], bounds[2 * axis_idx + 1]
         t = self.slice_slider.value() / 100.0
@@ -896,6 +903,7 @@ class GyroidGeneratorGUI(QMainWindow):
         self.show_cav_b_check.setChecked(False)
         self.slice_enable_check.setChecked(False)
         self.slice_axis_combo.setCurrentIndex(0)
+        self.slice_reverse_check.setChecked(False)
         self.slice_slider.setValue(50)
         self._update_slice_label()
         self.plotter.clear()

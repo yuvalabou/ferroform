@@ -124,15 +124,18 @@ def test_slice_inspector_and_manufacturability_stats(gui_window):
     # Slice controls start disabled, then enable when toggled
     assert not gui_window.slice_enable_check.isChecked()
     assert not gui_window.slice_axis_combo.isEnabled()
+    assert not gui_window.slice_reverse_check.isEnabled()
     assert not gui_window.slice_slider.isEnabled()
 
     gui_window.slice_enable_check.setChecked(True)
     assert gui_window.slice_axis_combo.isEnabled()
+    assert gui_window.slice_reverse_check.isEnabled()
     assert gui_window.slice_slider.isEnabled()
 
-    # Test switching axes (X, Y, Z) and moving the slider (GPU clipping plane, no CPU re-clip)
+    # Test switching axes (X, Y, Z), reversing plane, and moving the slider
     expected_normals = [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)]
     for axis_idx, expected_normal in enumerate(expected_normals):
+        gui_window.slice_reverse_check.setChecked(False)
         gui_window.slice_axis_combo.setCurrentIndex(axis_idx)
         gui_window.slice_slider.setValue(25)
         plane = gui_window._get_slice_plane()
@@ -142,6 +145,10 @@ def test_slice_inspector_and_manufacturability_stats(gui_window):
         assert gui_window._clip_plane.GetNormal() == expected_normal
         assert len(gui_window._mesh_actors) > 0
         assert gui_window._mesh_actors[0].mapper.GetNumberOfClippingPlanes() == 1
+
+        gui_window.slice_reverse_check.setChecked(True)
+        flipped_normal = tuple(-c if c != 0.0 else 0.0 for c in expected_normal)
+        assert gui_window._clip_plane.GetNormal() == flipped_normal
 
     gui_window.slice_enable_check.setChecked(False)
     assert gui_window._mesh_actors[0].mapper.GetNumberOfClippingPlanes() == 0

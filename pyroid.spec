@@ -5,7 +5,7 @@ datas = []
 binaries = []
 hiddenimports = ['pyroid_rs']
 
-for package_name in ['pyvista', 'pyvistaqt', 'trimesh', 'qdarkstyle', 'manifold3d']:
+for package_name in ['pyvista', 'pyvistaqt', 'trimesh', 'qdarkstyle']:
     pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(package_name)
     datas += pkg_datas
     binaries += pkg_binaries

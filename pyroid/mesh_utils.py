@@ -54,9 +54,15 @@ def convert_stl_to_gyroid(
     """
     params_dict = asdict(params)
     params_dict["include_cavities"] = include_cavities
-    is_shell_void, mesh_buf, cav_a_buf, cav_b_buf = pyroid_rs.convert_stl_to_tpms(
-        np.asarray(stl_mesh.vertices, dtype=np.float64),
-        np.asarray(stl_mesh.faces, dtype=np.uint32),
+
+    clean_stl = stl_mesh
+    if params.preserve_shell and not stl_mesh.is_watertight:
+        clean_stl = stl_mesh.copy()
+        clean_stl.fill_holes()
+
+    _is_shell_void, mesh_buf, cav_a_buf, cav_b_buf = pyroid_rs.convert_stl_to_tpms(
+        np.asarray(clean_stl.vertices, dtype=np.float64),
+        np.asarray(clean_stl.faces, dtype=np.uint32),
         params_dict,
         progress_callback,
     )
@@ -68,55 +74,9 @@ def convert_stl_to_gyroid(
             pv.set_new_attribute(out_mesh, "cavity_b", polydata_from_buffers(*cav_b_buf))
         return out_mesh
 
-    if is_shell_void:
-        void_pts, void_cells = mesh_buf
-        if len(void_pts) == 0 or len(void_cells) == 0:
-            if progress_callback:
-                progress_callback(95, "Finalizing mesh...")
-            return _attach_cavities(pv.wrap(stl_mesh))
-
-        void_faces = void_cells.reshape((-1, 4))[:, 1:].astype(np.uint32)
-
-        # Prepare clean STL mesh for boolean subtraction
-        clean_stl = stl_mesh.copy()
-        if not clean_stl.is_watertight:
-            clean_stl.fill_holes()
-        if clean_stl.volume < 0:
-            clean_stl.faces = clean_stl.faces[:, ::-1]
-
-        # Robust boolean subtraction: outer STL minus internal gyroid void.
-        # Keeps original CAD surface triangles intact while skipping redundant Python validation.
-        import manifold3d
-
-        if progress_callback:
-            progress_callback(85, "Performing manifold boolean subtraction...")
-
-        m_outer = manifold3d.Manifold(
-            manifold3d.Mesh(
-                vert_properties=np.asarray(clean_stl.vertices, dtype=np.float32),
-                tri_verts=np.asarray(clean_stl.faces, dtype=np.uint32),
-            )
-        )
-        m_void = manifold3d.Manifold(
-            manifold3d.Mesh(
-                vert_properties=np.asarray(void_pts, dtype=np.float32),
-                tri_verts=void_faces,
-            )
-        )
-        diff = m_outer - m_void
-        res_mesh = diff.to_mesh()
-        tri_result = trimesh.Trimesh(
-            vertices=res_mesh.vert_properties, faces=res_mesh.tri_verts, process=False
-        )
-        if tri_result.volume < 0:
-            tri_result.faces = tri_result.faces[:, ::-1]
-
-        if progress_callback:
-            progress_callback(95, "Wrapping final mesh...")
-
-        return _attach_cavities(pv.wrap(tri_result))
-
     mesh = polydata_from_buffers(*mesh_buf, rust_manifold=True)
+    if params.flat_cap:
+        pv.set_new_attribute(mesh, "_rust_flat_capped", True)
     return _attach_cavities(mesh)
 
 
@@ -144,43 +104,13 @@ def prepare_for_printing(
         z_min, z_max = tri.bounds[:, 2]
         margin = (z_max - z_min) * 0.01
         if margin > 0.001:
-            clipped = False
-            try:
-                import manifold3d
-
-                m = manifold3d.Manifold(
-                    manifold3d.Mesh(
-                        vert_properties=np.asarray(tri.vertices, dtype=np.float32),
-                        tri_verts=np.asarray(tri.faces, dtype=np.uint32),
-                    )
-                )
-                m = m.trim_by_plane((0, 0, -1), -(z_max - margin)).trim_by_plane(
-                    (0, 0, 1), z_min + margin
-                )
-                res = m.to_mesh()
-                tri = trimesh.Trimesh(
-                    vertices=res.vert_properties, faces=res.tri_verts, process=False
-                )
-                clipped = True
-            except Exception:
-                clipped = False
-
-            if not clipped:
-                try:
-                    tri = trimesh.intersections.slice_mesh_plane(
-                        tri,
-                        plane_normal=[0, 0, -1],
-                        plane_origin=[0, 0, z_max - margin],
-                        cap=True,
-                    )
-                    tri = trimesh.intersections.slice_mesh_plane(
-                        tri,
-                        plane_normal=[0, 0, 1],
-                        plane_origin=[0, 0, z_min + margin],
-                        cap=True,
-                    )
-                except Exception:
-                    pass
+            pts, cells = pyroid_rs.trim_flat_cap(
+                np.asarray(tri.vertices, dtype=np.float32),
+                np.asarray(tri.faces, dtype=np.uint32),
+            )
+            if len(pts) > 0 and len(cells) > 0:
+                faces = cells.reshape((-1, 4))[:, 1:]
+                tri = trimesh.Trimesh(vertices=pts, faces=faces, process=False)
 
     # Ensure watertightness and repair broken faces
     if not tri.is_watertight:
@@ -190,24 +120,6 @@ def prepare_for_printing(
         tri.update_faces(tri.nondegenerate_faces())
         tri.update_faces(tri.unique_faces())
         tri.remove_unreferenced_vertices()
-
-        # If manifold3d is available, validate 2-manifold orientation
-        try:
-            import manifold3d
-
-            m_check = manifold3d.Manifold(
-                manifold3d.Mesh(
-                    vert_properties=np.asarray(tri.vertices, dtype=np.float32),
-                    tri_verts=np.asarray(tri.faces, dtype=np.uint32),
-                )
-            )
-            if m_check.status().name == "NoError" and m_check.volume() > 0:
-                m_mesh = m_check.to_mesh()
-                tri = trimesh.Trimesh(
-                    vertices=m_mesh.vert_properties, faces=m_mesh.tri_verts, process=False
-                )
-        except Exception:
-            pass
 
         # Unify counter-clockwise winding order and outward normals
         trimesh.repair.fix_winding(tri)
@@ -238,9 +150,9 @@ def export_stl_binary(
       - Watertight topology, consistent counter-clockwise face winding, no degenerate facets.
     """
     if (
-        not flat_cap
-        and isinstance(mesh, pv.PolyData)
+        isinstance(mesh, pv.PolyData)
         and getattr(mesh, "_rust_manifold", False)
+        and (not flat_cap or getattr(mesh, "_rust_flat_capped", False))
         and (mesh.n_cells == 0 or mesh.faces.size == mesh.n_cells * 4)
     ):
         if mesh.n_cells == 0:

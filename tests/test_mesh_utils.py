@@ -223,7 +223,6 @@ def test_export_stl_binary_buildstar_compatibility(tmp_path):
     assert loaded.is_watertight
     assert loaded.is_winding_consistent
     assert (loaded.area_faces < 1e-12).sum() == 0
-
     norms = np.linalg.norm(loaded.face_normals, axis=1)
     np.testing.assert_allclose(norms, 1.0, atol=1e-3)
     assert not np.isnan(loaded.face_normals).any()
@@ -295,3 +294,43 @@ def test_direct_rust_stl_writer_fast_path(tmp_path, monkeypatch):
     assert loaded.is_watertight
     assert loaded.is_winding_consistent
     assert (loaded.area_faces < 1e-12).sum() == 0
+
+
+def test_stl_gyroid_flat_cap_and_shell_native_rust(tmp_path, monkeypatch):
+    cube = trimesh.creation.box(extents=[12, 12, 12])
+    in_stl = str(tmp_path / "in_cap.stl")
+    out_stl = str(tmp_path / "out_cap.stl")
+    cube.export(in_stl)
+
+    tri_mesh = load_trimesh(in_stl)
+    params = STLConversionParams(
+        stl_path=in_stl,
+        resolution=30,
+        cell_size=4.0,
+        wall_thickness=0.6,
+        preserve_shell=True,
+        shell_thickness=1.0,
+        flat_cap=True,
+    )
+    mesh = convert_stl_to_gyroid(tri_mesh, params)
+    assert getattr(mesh, "_rust_manifold", False)
+    assert getattr(mesh, "_rust_flat_capped", False)
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("prepare_for_printing should be bypassed on Rust flat_cap fast path")
+
+    monkeypatch.setattr(mesh_utils, "prepare_for_printing", _fail_if_called)
+    export_stl_binary(mesh, out_stl, flat_cap=True)
+
+    loaded = trimesh.load(out_stl, force="mesh")
+    assert loaded.is_watertight
+    assert loaded.is_winding_consistent
+    assert 0 < loaded.volume < cube.volume
+    # 1% margin on 12mm height -> z in [-5.88, +5.88]
+    np.testing.assert_allclose(loaded.bounds[:, 2], [-5.88, 5.88], atol=1e-2)
+
+    # Also test prepare_for_printing(flat_cap=True) directly via Rust trim_flat_cap
+    monkeypatch.undo()
+    capped_cube = prepare_for_printing(cube, flat_cap=True)
+    assert capped_cube.is_watertight
+    np.testing.assert_allclose(capped_cube.bounds[:, 2], [-5.88, 5.88], atol=1e-3)

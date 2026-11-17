@@ -1,6 +1,7 @@
 //! Pure Rust TPMS & volumetric lattice generation engine for PyRoid.
 
 pub mod bvh;
+pub mod csg;
 pub mod edt;
 pub mod manifold;
 pub mod marching;
@@ -399,20 +400,28 @@ pub fn convert_stl(
         let dz = grid_extent[2] / ((nz - 1).max(1) as f64);
 
         let dist_inside = edt::edt_3d(&inside_3d, nx, ny, nz, dx, dy, dz);
+        let outside_3d: Vec<bool> = inside_3d.par_iter().map(|&b| !b).collect();
+        let dist_outside = edt::edt_3d(&outside_3d, nx, ny, nz, dx, dy, dz);
+
         let inner_mask: Vec<bool> = dist_inside
             .par_iter()
             .map(|&d| d > params.shell_thickness)
             .collect();
         let field_void: Vec<f64> = dist_inside
             .par_iter()
+            .zip(dist_outside.par_iter())
             .zip(scalar_val.par_iter())
-            .map(|(&d, &s)| {
-                let vs = if params.is_skeletal {
-                    skeletal_thresh - s
+            .map(|((&d_in, &d_out), &s)| {
+                if d_in <= 0.0 {
+                    params.shell_thickness + d_out
                 } else {
-                    t - s.abs()
-                };
-                (params.shell_thickness - d).max(vs)
+                    let vs = if params.is_skeletal {
+                        skeletal_thresh - s
+                    } else {
+                        t - s.abs()
+                    };
+                    (params.shell_thickness - d_in).max(vs)
+                }
             })
             .collect();
 
@@ -420,12 +429,27 @@ pub fn convert_stl(
         let mut void_mesh = extract_isosurface_cartesian(&xs, &ys, &zs, &field_void);
         manifold::ensure_positive_volume(&mut void_mesh);
 
+        progress(85, "Performing manifold shell boolean subtraction...");
+        let outer_mesh = MeshData {
+            points: vertices
+                .iter()
+                .map(|v| [v[0] as f32, v[1] as f32, v[2] as f32])
+                .collect(),
+            faces: faces.to_vec(),
+        };
+        let mut shell_mesh = csg::subtract_interior_void(&outer_mesh, &void_mesh);
+        if params.flat_cap {
+            progress(90, "Applying flat Z-plane caps...");
+            shell_mesh = csg::trim_flat_cap(&shell_mesh);
+        }
+
         let (cavity_a, cavity_b) = extract_cavities(&inner_mask);
+        progress(95, "Finalizing mesh...");
         return Ok(GeneratedLattice {
-            mesh: void_mesh,
+            mesh: shell_mesh,
             cavity_a,
             cavity_b,
-            is_shell_void: true,
+            is_shell_void: false,
         });
     }
 
@@ -446,6 +470,10 @@ pub fn convert_stl(
 
     let mut mesh = extract_isosurface_cartesian(&xs, &ys, &zs, &field);
     manifold::ensure_positive_volume(&mut mesh);
+    if params.flat_cap {
+        progress(88, "Applying flat Z-plane caps...");
+        mesh = csg::trim_flat_cap(&mesh);
+    }
     let (cavity_a, cavity_b) = extract_cavities(&inside_3d);
 
     progress(95, "Finalizing mesh...");
@@ -546,9 +574,10 @@ mod tests {
             include_cavities: true,
         };
         let out = convert_stl(&cube.vertices, &cube.faces, &params, |_, _| {}).unwrap();
-        assert!(out.is_shell_void);
-        assert!(out.mesh.n_cells() > 0);
-        assert!(manifold::signed_volume(&out.mesh) > 0.0);
+        assert!(!out.is_shell_void);
+        assert!(out.mesh.n_cells() > 12);
+        let vol = manifold::signed_volume(&out.mesh);
+        assert!(vol > 0.0 && vol < 12.0 * 12.0 * 12.0);
 
         let provider = DefaultLatticeProvider;
         let inf_params = StlParams {

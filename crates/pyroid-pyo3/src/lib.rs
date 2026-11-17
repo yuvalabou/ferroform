@@ -6,6 +6,7 @@ use numpy::{IntoPyArray, PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray2};
 use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use pyroid_core::csg::trim_flat_cap as rust_trim_flat_cap;
 use pyroid_core::manifold::{write_binary_stl_slices, DEFAULT_STL_HEADER};
 use pyroid_core::marching::MeshData;
 use pyroid_core::tpms::TpmsType;
@@ -189,10 +190,46 @@ fn write_stl_binary<'py>(
         .map_err(PyIOError::new_err)
 }
 
+/// Trim a closed mesh by top and bottom Z planes (1% margin) and cap the cut faces.
+#[pyfunction]
+fn trim_flat_cap<'py>(
+    py: Python<'py>,
+    points: PyReadonlyArray2<'py, f32>,
+    faces: PyReadonlyArray2<'py, u32>,
+) -> PyResult<MeshArrays<'py>> {
+    let p_arr = points.as_array();
+    let f_arr = faces.as_array();
+    if p_arr.ncols() != 3 || f_arr.ncols() != 3 {
+        return Err(PyValueError::new_err(
+            "points and faces must have shape (N, 3)",
+        ));
+    }
+
+    let pts: Vec<[f32; 3]> = if let Some(s) = p_arr.as_slice() {
+        s.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+    } else {
+        p_arr.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect()
+    };
+
+    let tris: Vec<[u32; 3]> = if let Some(s) = f_arr.as_slice() {
+        s.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect()
+    } else {
+        f_arr.rows().into_iter().map(|r| [r[0], r[1], r[2]]).collect()
+    };
+
+    let mesh = MeshData {
+        points: pts,
+        faces: tris,
+    };
+    let capped = py.allow_threads(|| rust_trim_flat_cap(&mesh));
+    mesh_to_py(py, capped)
+}
+
 #[pymodule]
 fn pyroid_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(generate_parametric_tpms, m)?)?;
     m.add_function(wrap_pyfunction!(convert_stl_to_tpms, m)?)?;
     m.add_function(wrap_pyfunction!(write_stl_binary, m)?)?;
+    m.add_function(wrap_pyfunction!(trim_flat_cap, m)?)?;
     Ok(())
 }

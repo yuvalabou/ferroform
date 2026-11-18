@@ -5,9 +5,9 @@ import pyroid_rs
 import pyvista as pv
 import trimesh
 
-from pyroid import mesh_utils
-from pyroid.core import GyroidGenerator
-from pyroid.mesh_utils import (
+from pyroid import core
+from pyroid.core import (
+    GyroidGenerator,
     convert_stl_to_gyroid,
     export_stl_binary,
     load_trimesh,
@@ -286,7 +286,7 @@ def test_direct_rust_stl_writer_fast_path(tmp_path, monkeypatch):
     def _fail_if_called(*args, **kwargs):
         raise AssertionError("prepare_for_printing should be bypassed on Rust fast path")
 
-    monkeypatch.setattr(mesh_utils, "prepare_for_printing", _fail_if_called)
+    monkeypatch.setattr(core, "prepare_for_printing", _fail_if_called)
     export_stl_binary(mesh, out_stl, flat_cap=False)
 
     loaded = trimesh.load(out_stl, force="mesh")
@@ -318,7 +318,7 @@ def test_stl_gyroid_flat_cap_and_shell_native_rust(tmp_path, monkeypatch):
     def _fail_if_called(*args, **kwargs):
         raise AssertionError("prepare_for_printing should be bypassed on Rust flat_cap fast path")
 
-    monkeypatch.setattr(mesh_utils, "prepare_for_printing", _fail_if_called)
+    monkeypatch.setattr(core, "prepare_for_printing", _fail_if_called)
     export_stl_binary(mesh, out_stl, flat_cap=True)
 
     loaded = trimesh.load(out_stl, force="mesh")

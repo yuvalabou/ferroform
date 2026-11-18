@@ -40,7 +40,7 @@ dev = [
 ]
 
 [project.scripts]
-pyroid = "pyroid.main:main"
+pyroid = "pyroid:main"
 pyroid-cli = "pyroid.cli:main"
 
 [tool.maturin]

@@ -2,7 +2,7 @@
 
 import trimesh
 
-from pyroid.mesh_utils import convert_stl_to_gyroid, export_stl_binary, load_trimesh
+from pyroid.core import convert_stl_to_gyroid, export_stl_binary, load_trimesh
 from pyroid.models import STLConversionParams
 
 

@@ -200,7 +200,7 @@ def main():
             )
             grade_wall_end = args.grade_wall_end
             if grade_wall_end is None and args.grade_infill_end is not None:
-                from pyroid.tpms import get_tpms_kernel
+                from pyroid.models import get_tpms_kernel
 
                 target_cell = args.grade_cell_end if args.grade_cell_end is not None else cell_size
                 end_pct = min(99.0, max(1.0, args.grade_infill_end))

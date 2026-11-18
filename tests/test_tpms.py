@@ -9,8 +9,9 @@ import pytest
 import trimesh
 
 from pyroid.core import GyroidGenerator
-from pyroid.models import GyroidParams, STLConversionParams
-from pyroid.tpms import (
+from pyroid.models import (
+    GyroidParams,
+    STLConversionParams,
     TPMSType,
     get_all_tpms_kernels,
 )

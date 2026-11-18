@@ -7,7 +7,7 @@ Main entry point for the PyRoid application.
 
 import sys
 
-from pyroid.main import main
+from pyroid import main
 
 if __name__ == "__main__":
     sys.exit(main())

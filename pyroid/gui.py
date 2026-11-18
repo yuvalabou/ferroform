@@ -37,8 +37,12 @@ from pyvistaqt import QtInteractor
 from vtkmodules.vtkCommonDataModel import vtkPlane
 
 from pyroid.core import GyroidGenerator
-from pyroid.models import GyroidParams, STLConversionParams
-from pyroid.tpms import get_all_tpms_kernels, get_tpms_kernel
+from pyroid.models import (
+    GyroidParams,
+    STLConversionParams,
+    get_all_tpms_kernels,
+    get_tpms_kernel,
+)
 
 
 class GeneratorWorker(QThread):

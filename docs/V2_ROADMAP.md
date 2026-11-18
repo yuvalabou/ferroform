@@ -6,7 +6,7 @@ Planned architecture, performance, and feature improvements for the v2.0 release
 
 ## 1. Core Geometry & Performance (`crates/pyroid-core`)
 
-- [ ] **Parallel Marching Cubes Step 2 & Sparse Edge Welding** (`src/marching.rs`)
+- [x] **Parallel Marching Cubes Step 2 & Sparse Edge Welding** (`src/marching.rs`)
   - Parallelize vertex welding and triangle emission per slab with boundary-edge stitching.
   - Replace the dense `nx * ny * nz * 3 * 4`-byte `edge_verts` allocation with a sparse/chunked structure to support higher voxel resolutions (`res >= 250–400`) with lower peak memory.
 - [x] **Functionally Graded Lattices** (`src/lib.rs`, `src/edt.rs`, `src/grading.rs`)

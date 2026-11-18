@@ -146,6 +146,101 @@ pub fn extract_isosurface_cylindrical(
     extract_isosurface(&GridCoords::Cylindrical { rs, phi_cs, zs }, field)
 }
 
+const HI_BIT: u32 = 1 << 31;
+
+/// Compact open-addressed hash map for sparse `(i, j, k, axis)` -> `vert_id` edge welding.
+struct SparseEdgeMap {
+    keys: Vec<u64>,
+    vals: Vec<u32>,
+    mask: usize,
+    len: usize,
+}
+
+impl SparseEdgeMap {
+    #[inline]
+    fn hash(mut x: u64) -> usize {
+        x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        (x ^ (x >> 31)) as usize
+    }
+
+    fn with_capacity(expected_items: usize) -> Self {
+        let cap = (expected_items.saturating_mul(2)).next_power_of_two().max(1024);
+        Self {
+            keys: vec![u64::MAX; cap],
+            vals: vec![0; cap],
+            mask: cap - 1,
+            len: 0,
+        }
+    }
+
+    #[inline]
+    fn get(&self, key: u64) -> Option<u32> {
+        let mut idx = Self::hash(key) & self.mask;
+        loop {
+            let k = self.keys[idx];
+            if k == key {
+                return Some(self.vals[idx]);
+            }
+            if k == u64::MAX {
+                return None;
+            }
+            idx = (idx + 1) & self.mask;
+        }
+    }
+
+    fn grow(&mut self) {
+        let new_cap = self.keys.len() * 2;
+        let new_mask = new_cap - 1;
+        let mut new_keys = vec![u64::MAX; new_cap];
+        let mut new_vals = vec![0; new_cap];
+        for (&k, &v) in self.keys.iter().zip(self.vals.iter()) {
+            if k != u64::MAX {
+                let mut idx = Self::hash(k) & new_mask;
+                while new_keys[idx] != u64::MAX {
+                    idx = (idx + 1) & new_mask;
+                }
+                new_keys[idx] = k;
+                new_vals[idx] = v;
+            }
+        }
+        self.keys = new_keys;
+        self.vals = new_vals;
+        self.mask = new_mask;
+    }
+
+    #[inline]
+    fn insert(&mut self, key: u64, val: u32) {
+        if (self.len + 1) * 2 >= self.keys.len() {
+            self.grow();
+        }
+        let mut idx = Self::hash(key) & self.mask;
+        loop {
+            let k = self.keys[idx];
+            if k == u64::MAX {
+                self.keys[idx] = key;
+                self.vals[idx] = val;
+                self.len += 1;
+                return;
+            }
+            if k == key {
+                self.vals[idx] = val;
+                return;
+            }
+            idx = (idx + 1) & self.mask;
+        }
+    }
+}
+
+struct ChunkResult {
+    edge_map: SparseEdgeMap,
+    owned_points: Vec<[f32; 3]>,
+    hi_points: Vec<[f32; 3]>,
+    hi_slots: Vec<u64>,
+    faces: Vec<[u32; 3]>,
+    skipped_degenerate: bool,
+}
+
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn get_or_insert_edge(
@@ -154,16 +249,19 @@ fn get_or_insert_edge(
     ny: usize,
     nz: usize,
     stride_x: usize,
-    edge_verts: &mut [u32],
-    points: &mut Vec<[f32; 3]>,
+    i_end: usize,
+    is_last_chunk: bool,
+    edge_map: &mut SparseEdgeMap,
+    owned_points: &mut Vec<[f32; 3]>,
+    hi_points: &mut Vec<[f32; 3]>,
+    hi_slots: &mut Vec<u64>,
     gi: usize,
     gj: usize,
     gk: usize,
     axis: usize,
 ) -> u32 {
-    let slot_idx = ((gi * ny + gj) * nz + gk) * 3 + axis;
-    let existing = edge_verts[slot_idx];
-    if existing != u32::MAX {
+    let slot_idx = (((gi * ny + gj) * nz + gk) * 3 + axis) as u64;
+    if let Some(existing) = edge_map.get(slot_idx) {
         return existing;
     }
 
@@ -189,10 +287,40 @@ fn get_or_insert_edge(
         (p0[2] + mu * (p1[2] - p0[2])) as f32,
     ];
 
-    let vert_id = points.len() as u32;
-    points.push(pt);
-    edge_verts[slot_idx] = vert_id;
+    let vert_id = if !is_last_chunk && gi == i_end {
+        let hi_id = hi_points.len() as u32;
+        hi_points.push(pt);
+        hi_slots.push(slot_idx);
+        HI_BIT | hi_id
+    } else {
+        let id = owned_points.len() as u32;
+        owned_points.push(pt);
+        id
+    };
+    edge_map.insert(slot_idx, vert_id);
     vert_id
+}
+
+#[inline(always)]
+fn chunk_point(v: u32, owned_points: &[[f32; 3]], hi_points: &[[f32; 3]]) -> [f32; 3] {
+    if (v & HI_BIT) != 0 {
+        hi_points[(v & !HI_BIT) as usize]
+    } else {
+        owned_points[v as usize]
+    }
+}
+
+fn split_by_lengths<'a, T>(
+    mut slice: &'a mut [T],
+    lengths: impl Iterator<Item = usize>,
+) -> Vec<&'a mut [T]> {
+    let mut out = Vec::new();
+    for len in lengths {
+        let (head, tail) = slice.split_at_mut(len);
+        out.push(head);
+        slice = tail;
+    }
+    out
 }
 
 /// Extract a welded, 2-manifold zero-level isosurface from a 3D scalar field.
@@ -257,97 +385,215 @@ pub fn extract_isosurface(coords: &GridCoords<'_>, field: &[f64]) -> MeshData {
         return MeshData::default();
     }
 
-    // Step 2: Weld edge vertices using flat O(1) lookup table (nx * ny * nz * 3).
-    let mut edge_verts = vec![u32::MAX; nx * ny * nz * 3];
-    let mut points = Vec::with_capacity(total_active);
-    let mut faces = Vec::with_capacity(total_active * 2);
-    let mut skipped_degenerate = false;
-
-    for slab in active_slabs {
-        for (i, j, k, cube_index) in slab {
-            let em = EDGE_TABLE[cube_index as usize];
-            if em == 0 {
-                continue;
-            }
-
-            let mut vert_list = [u32::MAX; 12];
-            if (em & (1 << 0)) != 0 {
-                vert_list[0] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i, j, k, 0);
-            }
-            if (em & (1 << 1)) != 0 {
-                vert_list[1] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i + 1, j, k, 1);
-            }
-            if (em & (1 << 2)) != 0 {
-                vert_list[2] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i, j + 1, k, 0);
-            }
-            if (em & (1 << 3)) != 0 {
-                vert_list[3] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i, j, k, 1);
-            }
-            if (em & (1 << 4)) != 0 {
-                vert_list[4] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i, j, k + 1, 0);
-            }
-            if (em & (1 << 5)) != 0 {
-                vert_list[5] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i + 1, j, k + 1, 1);
-            }
-            if (em & (1 << 6)) != 0 {
-                vert_list[6] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i, j + 1, k + 1, 0);
-            }
-            if (em & (1 << 7)) != 0 {
-                vert_list[7] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i, j, k + 1, 1);
-            }
-            if (em & (1 << 8)) != 0 {
-                vert_list[8] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i, j, k, 2);
-            }
-            if (em & (1 << 9)) != 0 {
-                vert_list[9] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i + 1, j, k, 2);
-            }
-            if (em & (1 << 10)) != 0 {
-                vert_list[10] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i + 1, j + 1, k, 2);
-            }
-            if (em & (1 << 11)) != 0 {
-                vert_list[11] = get_or_insert_edge(coords, field, ny, nz, stride_x, &mut edge_verts, &mut points, i, j + 1, k, 2);
-            }
-
-            let tri_row = &TRI_TABLE[cube_index as usize];
-            let mut t = 0;
-            while t < 15 && tri_row[t] != -1 {
-                let v0 = vert_list[tri_row[t] as usize];
-                let v1 = vert_list[tri_row[t + 1] as usize];
-                let v2 = vert_list[tri_row[t + 2] as usize];
-
-                if v0 != v1 && v1 != v2 && v2 != v0 {
-                    let p0 = points[v0 as usize];
-                    let p1 = points[v1 as usize];
-                    let p2 = points[v2 as usize];
-                    let e1 = [
-                        (p1[0] - p0[0]) as f64,
-                        (p1[1] - p0[1]) as f64,
-                        (p1[2] - p0[2]) as f64,
-                    ];
-                    let e2 = [
-                        (p2[0] - p0[0]) as f64,
-                        (p2[1] - p0[1]) as f64,
-                        (p2[2] - p0[2]) as f64,
-                    ];
-                    let cx = e1[1] * e2[2] - e1[2] * e2[1];
-                    let cy = e1[2] * e2[0] - e1[0] * e2[2];
-                    let cz = e1[0] * e2[1] - e1[1] * e2[0];
-                    let cross_sq = cx * cx + cy * cy + cz * cz;
-                    if cross_sq >= 1e-24 {
-                        faces.push([v0, v1, v2]);
-                    } else {
-                        skipped_degenerate = true;
-                    }
-                } else {
-                    skipped_degenerate = true;
-                }
-                t += 3;
+    // Step 2: Parallel chunked extraction with sparse edge welding.
+    let num_slabs = nx - 1;
+    let ranges: Vec<(usize, usize)> = if total_active < 4096 || num_slabs < 2 {
+        vec![(0, num_slabs)]
+    } else {
+        let num_chunks = (rayon::current_num_threads() * 2).min(num_slabs).max(1);
+        let target_per_chunk = (total_active / num_chunks).max(1);
+        let mut ranges = Vec::with_capacity(num_chunks);
+        let mut start = 0;
+        let mut acc = 0;
+        for (i, slab) in active_slabs.iter().enumerate() {
+            acc += slab.len();
+            if acc >= target_per_chunk && ranges.len() + 1 < num_chunks && i + 1 < num_slabs {
+                ranges.push((start, i + 1));
+                start = i + 1;
+                acc = 0;
             }
         }
+        if start < num_slabs {
+            ranges.push((start, num_slabs));
+        }
+        ranges
+    };
+
+    const EDGE_OFFSETS: [(usize, usize, usize, usize); 12] = [
+        (0, 0, 0, 0),
+        (1, 0, 0, 1),
+        (0, 1, 0, 0),
+        (0, 0, 0, 1),
+        (0, 0, 1, 0),
+        (1, 0, 1, 1),
+        (0, 1, 1, 0),
+        (0, 0, 1, 1),
+        (0, 0, 0, 2),
+        (1, 0, 0, 2),
+        (1, 1, 0, 2),
+        (0, 1, 0, 2),
+    ];
+
+    let num_chunks = ranges.len();
+    let mut chunks: Vec<ChunkResult> = ranges
+        .par_iter()
+        .enumerate()
+        .map(|(chunk_idx, &(i_start, i_end))| {
+            let is_last_chunk = chunk_idx + 1 == num_chunks;
+            let chunk_active: usize = active_slabs[i_start..i_end].iter().map(Vec::len).sum();
+            let mut edge_map = SparseEdgeMap::with_capacity(chunk_active * 3);
+            let mut owned_points = Vec::with_capacity(chunk_active);
+            let mut hi_points = Vec::new();
+            let mut hi_slots = Vec::new();
+            let mut faces = Vec::with_capacity(chunk_active * 2);
+            let mut skipped_degenerate = false;
+
+            for slab in &active_slabs[i_start..i_end] {
+                for &(i, j, k, cube_index) in slab {
+                    let mut em = EDGE_TABLE[cube_index as usize];
+                    if em == 0 {
+                        continue;
+                    }
+
+                    let mut vert_list = [u32::MAX; 12];
+                    while em != 0 {
+                        let e = em.trailing_zeros() as usize;
+                        em &= em - 1;
+                        let (di, dj, dk, axis) = EDGE_OFFSETS[e];
+                        vert_list[e] = get_or_insert_edge(
+                            coords,
+                            field,
+                            ny,
+                            nz,
+                            stride_x,
+                            i_end,
+                            is_last_chunk,
+                            &mut edge_map,
+                            &mut owned_points,
+                            &mut hi_points,
+                            &mut hi_slots,
+                            i + di,
+                            j + dj,
+                            k + dk,
+                            axis,
+                        );
+                    }
+
+                    let tri_row = &TRI_TABLE[cube_index as usize];
+                    let mut t = 0;
+                    while t < 15 && tri_row[t] != -1 {
+                        let v0 = vert_list[tri_row[t] as usize];
+                        let v1 = vert_list[tri_row[t + 1] as usize];
+                        let v2 = vert_list[tri_row[t + 2] as usize];
+
+                        if v0 != v1 && v1 != v2 && v2 != v0 {
+                            let p0 = chunk_point(v0, &owned_points, &hi_points);
+                            let p1 = chunk_point(v1, &owned_points, &hi_points);
+                            let p2 = chunk_point(v2, &owned_points, &hi_points);
+                            let e1 = [
+                                (p1[0] - p0[0]) as f64,
+                                (p1[1] - p0[1]) as f64,
+                                (p1[2] - p0[2]) as f64,
+                            ];
+                            let e2 = [
+                                (p2[0] - p0[0]) as f64,
+                                (p2[1] - p0[1]) as f64,
+                                (p2[2] - p0[2]) as f64,
+                            ];
+                            let cx = e1[1] * e2[2] - e1[2] * e2[1];
+                            let cy = e1[2] * e2[0] - e1[0] * e2[2];
+                            let cz = e1[0] * e2[1] - e1[1] * e2[0];
+                            let cross_sq = cx * cx + cy * cy + cz * cz;
+                            if cross_sq >= 1e-24 {
+                                faces.push([v0, v1, v2]);
+                            } else {
+                                skipped_degenerate = true;
+                            }
+                        } else {
+                            skipped_degenerate = true;
+                        }
+                        t += 3;
+                    }
+                }
+            }
+
+            ChunkResult {
+                edge_map,
+                owned_points,
+                hi_points,
+                hi_slots,
+                faces,
+                skipped_degenerate,
+            }
+        })
+        .collect();
+
+    if chunks.len() == 1 {
+        let chunk = chunks.pop().unwrap();
+        let mut mesh = MeshData {
+            points: chunk.owned_points,
+            faces: chunk.faces,
+        };
+        if chunk.skipped_degenerate {
+            mesh.compact_unreferenced();
+        }
+        return mesh;
     }
 
+    let mut point_offsets = Vec::with_capacity(chunks.len());
+    let mut total_owned_points = 0usize;
+    let mut total_faces = 0usize;
+    let mut any_skipped_degenerate = false;
+    for chunk in &chunks {
+        point_offsets.push(total_owned_points as u32);
+        total_owned_points += chunk.owned_points.len();
+        total_faces += chunk.faces.len();
+        any_skipped_degenerate |= chunk.skipped_degenerate;
+    }
+
+    let mut extra_points: Vec<[f32; 3]> = Vec::new();
+    let mut hi_remaps: Vec<Vec<u32>> = Vec::with_capacity(chunks.len());
+    for c in 0..chunks.len() {
+        if c + 1 == chunks.len() {
+            hi_remaps.push(Vec::new());
+            continue;
+        }
+        let next_map = &chunks[c + 1].edge_map;
+        let next_offset = point_offsets[c + 1];
+        let mut remap = Vec::with_capacity(chunks[c].hi_slots.len());
+        for (hi_idx, &slot) in chunks[c].hi_slots.iter().enumerate() {
+            if let Some(next_local_id) = next_map.get(slot) {
+                debug_assert_eq!(next_local_id & HI_BIT, 0);
+                remap.push(next_offset + next_local_id);
+            } else {
+                let global_id = (total_owned_points + extra_points.len()) as u32;
+                extra_points.push(chunks[c].hi_points[hi_idx]);
+                remap.push(global_id);
+            }
+        }
+        hi_remaps.push(remap);
+    }
+
+    let total_points = total_owned_points + extra_points.len();
+    let mut points = vec![[0.0f32; 3]; total_points];
+    let mut faces = vec![[0u32; 3]; total_faces];
+    if !extra_points.is_empty() {
+        points[total_owned_points..].copy_from_slice(&extra_points);
+    }
+
+    let (owned_dst, _) = points.split_at_mut(total_owned_points);
+    let point_slices = split_by_lengths(owned_dst, chunks.iter().map(|c| c.owned_points.len()));
+    let face_slices = split_by_lengths(&mut faces, chunks.iter().map(|c| c.faces.len()));
+
+    (chunks, point_slices, face_slices, point_offsets, hi_remaps)
+        .into_par_iter()
+        .for_each(|(chunk, pt_dst, face_dst, pt_off, hi_remap)| {
+            pt_dst.copy_from_slice(&chunk.owned_points);
+            for (dst, src) in face_dst.iter_mut().zip(chunk.faces.iter()) {
+                let mut f = *src;
+                for v in &mut f {
+                    if (*v & HI_BIT) != 0 {
+                        *v = hi_remap[(*v & !HI_BIT) as usize];
+                    } else {
+                        *v += pt_off;
+                    }
+                }
+                *dst = f;
+            }
+        });
+
     let mut mesh = MeshData { points, faces };
-    if skipped_degenerate {
+    if any_skipped_degenerate {
         mesh.compact_unreferenced();
     }
     mesh
@@ -416,6 +662,31 @@ mod tests {
             for (j, &y) in coords.iter().enumerate() {
                 for (k, &z) in coords.iter().enumerate() {
                     if x.abs() <= 4.5 && y.abs() <= 4.5 && z.abs() <= 4.5 {
+                        let gx = (k_wave * x).sin() * (k_wave * y).cos()
+                            + (k_wave * y).sin() * (k_wave * z).cos()
+                            + (k_wave * z).sin() * (k_wave * x).cos();
+                        field[(i * n + j) * n + k] = gx.abs() - 0.5;
+                    }
+                }
+            }
+        }
+        let mesh = extract_isosurface_cartesian(&coords, &coords, &coords, &field);
+        assert_watertight_2_manifold(&mesh);
+        assert!(manifold::signed_volume(&mesh) > 0.0);
+    }
+
+    #[test]
+    fn test_parallel_chunked_gyroid_watertight() {
+        let n = 48usize;
+        let coords: Vec<f64> = (0..n)
+            .map(|i| -8.0 + 16.0 * (i as f64) / ((n - 1) as f64))
+            .collect();
+        let mut field = vec![1.0; n * n * n];
+        let k_wave = 2.0 * std::f64::consts::PI / 5.0;
+        for (i, &x) in coords.iter().enumerate() {
+            for (j, &y) in coords.iter().enumerate() {
+                for (k, &z) in coords.iter().enumerate() {
+                    if x.abs() <= 6.5 && y.abs() <= 6.5 && z.abs() <= 6.5 {
                         let gx = (k_wave * x).sin() * (k_wave * y).cos()
                             + (k_wave * y).sin() * (k_wave * z).cos()
                             + (k_wave * z).sin() * (k_wave * x).cos();

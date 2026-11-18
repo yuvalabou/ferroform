@@ -198,9 +198,9 @@ class GyroidGeneratorGUI(QMainWindow):
         self.tabs = QTabWidget()
         left_layout.addWidget(self.tabs)
 
-        # TAB 1: Parametric Gyroid Generator
-        tab_parametric = QWidget()
-        param_tab_layout = QVBoxLayout(tab_parametric)
+        # Parametric Gyroid Generator tab widget
+        self.tab_parametric = QWidget()
+        param_tab_layout = QVBoxLayout(self.tab_parametric)
 
         # Presets Section
         preset_box = QGroupBox("Presets")
@@ -276,11 +276,9 @@ class GyroidGeneratorGUI(QMainWindow):
         self.generate_btn.clicked.connect(self.on_generate_clicked)
         param_tab_layout.addWidget(self.generate_btn)
 
-        self.tabs.addTab(tab_parametric, "Parametric Gyroid")
-
-        # TAB 2: STL Volume Conversion
-        tab_stl = QWidget()
-        stl_tab_layout = QVBoxLayout(tab_stl)
+        # STL Volume Conversion tab widget
+        self.tab_stl = QWidget()
+        stl_tab_layout = QVBoxLayout(self.tab_stl)
 
         stl_file_box = QGroupBox("Input Mesh (STL)")
         stl_file_layout = QVBoxLayout(stl_file_box)
@@ -543,7 +541,8 @@ class GyroidGeneratorGUI(QMainWindow):
         stl_tab_layout.addWidget(self.convert_stl_btn)
         stl_tab_layout.addStretch()
 
-        self.tabs.addTab(tab_stl, "STL to Gyroid Volume")
+        self.tabs.addTab(self.tab_stl, "STL to Gyroid Volume")
+        self.tabs.addTab(self.tab_parametric, "Parametric Gyroid")
 
         # Shared Export Actions Section
         actions_box = QGroupBox("Export Options")
@@ -553,9 +552,12 @@ class GyroidGeneratorGUI(QMainWindow):
         self.save_stl_btn.clicked.connect(lambda: self.save_mesh("stl"))
         self.save_obj_btn = QPushButton("Export OBJ")
         self.save_obj_btn.clicked.connect(lambda: self.save_mesh("obj"))
+        self.save_3mf_btn = QPushButton("Export 3MF")
+        self.save_3mf_btn.clicked.connect(lambda: self.save_mesh("3mf"))
 
         actions_layout.addWidget(self.save_stl_btn)
         actions_layout.addWidget(self.save_obj_btn)
+        actions_layout.addWidget(self.save_3mf_btn)
         left_layout.addWidget(actions_box)
 
         # View Options Section
@@ -665,6 +667,10 @@ class GyroidGeneratorGUI(QMainWindow):
         export_stl = QAction("Export as &STL", self)
         export_stl.triggered.connect(lambda: self.save_mesh("stl"))
         file_menu.addAction(export_stl)
+
+        export_3mf = QAction("Export as &3MF", self)
+        export_3mf.triggered.connect(lambda: self.save_mesh("3mf"))
+        file_menu.addAction(export_3mf)
 
         file_menu.addSeparator()
         exit_action = QAction("E&xit", self)
@@ -825,7 +831,7 @@ class GyroidGeneratorGUI(QMainWindow):
             return
 
         self.stl_path_edit.setText(file_path)
-        self.tabs.setCurrentIndex(1)
+        self.tabs.setCurrentWidget(self.tab_stl)
         self.status_bar.showMessage(f"Loaded STL: {os.path.basename(file_path)}")
 
         try:
@@ -855,7 +861,7 @@ class GyroidGeneratorGUI(QMainWindow):
                 idx = self.param_tpms_combo.findData(str(preset_data["tpms_type"]))
                 if idx >= 0:
                     self.param_tpms_combo.setCurrentIndex(idx)
-            self.tabs.setCurrentIndex(0)
+            self.tabs.setCurrentWidget(self.tab_parametric)
             self.status_bar.showMessage(f"Loaded preset: {os.path.basename(file_path)}")
         except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
             QMessageBox.warning(self, "Invalid Preset", f"Failed to load preset: {e!s}")
@@ -1252,7 +1258,9 @@ class GyroidGeneratorGUI(QMainWindow):
             self.plotter.render()
 
     def on_skeletal_toggled(self, _checked: bool = False):
-        is_skeletal_stl = self.tabs.currentIndex() == 1 and self.stl_skeletal_check.isChecked()
+        is_skeletal_stl = (
+            self.tabs.currentWidget() is self.tab_stl and self.stl_skeletal_check.isChecked()
+        )
         skeletal = self.stl_skeletal_check.isChecked()
         self.stl_bias_label.setEnabled(not skeletal)
         self.stl_bias_edit.setEnabled(not skeletal)
@@ -1530,20 +1538,27 @@ class GyroidGeneratorGUI(QMainWindow):
             QMessageBox.warning(self, "Warning", "Please generate a mesh first")
             return
 
-        ext_filter = "STL Files (*.stl)" if file_type == "stl" else "OBJ Files (*.obj)"
+        ext_filters = {
+            "stl": "STL Files (*.stl)",
+            "obj": "OBJ Files (*.obj)",
+            "3mf": "3MF Files (*.3mf)",
+        }
+        ext_filter = ext_filters.get(file_type, "All Files (*)")
         filename, _ = QFileDialog.getSaveFileName(
             self, f"Save as {file_type.upper()}", "", ext_filter
         )
         if filename:
             if not filename.lower().endswith(f".{file_type}"):
                 filename += f".{file_type}"
+            is_stl_tab = self.tabs.currentWidget() is self.tab_stl
+            flat_cap = self.stl_cap_check.isChecked() if is_stl_tab else False
             match file_type:
                 case "stl":
-                    is_stl_tab = self.tabs.currentIndex() == 1
-                    flat_cap = self.stl_cap_check.isChecked() if is_stl_tab else False
                     self.generator.save_stl(filename, flat_cap=flat_cap)
                 case "obj":
                     self.generator.save_obj(filename)
+                case "3mf":
+                    self.generator.save_3mf(filename, flat_cap=flat_cap)
             self.status_bar.showMessage(f"Saved to {filename}")
 
     def new_project(self):

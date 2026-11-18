@@ -333,3 +333,34 @@ def test_stl_gyroid_flat_cap_and_shell_native_rust(tmp_path, monkeypatch):
     capped_cube = prepare_for_printing(cube, flat_cap=True)
     assert capped_cube.is_watertight
     np.testing.assert_allclose(capped_cube.bounds[:, 2], [-5.88, 5.88], atol=1e-3)
+
+
+def test_export_3mf_multibody(tmp_path):
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    out_3mf = str(tmp_path / "multibody.3mf")
+    generator = GyroidGenerator(GyroidParams(res=20))
+    generator.generate(include_cavities=True)
+    generator.save_3mf(out_3mf, include_cavities=True)
+
+    with zipfile.ZipFile(out_3mf, "r") as zf:
+        names = set(zf.namelist())
+        assert {"[Content_Types].xml", "_rels/.rels", "3D/3dmodel.model"} <= names
+        model_xml = zf.read("3D/3dmodel.model")
+
+    root = ET.fromstring(model_xml)
+    ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    assert root.attrib.get("unit") == "millimeter"
+    objects = root.findall("m:resources/m:object", ns)
+    obj_names = {obj.attrib["name"] for obj in objects}
+    assert "lattice" in obj_names
+    assert "cavity_a" in obj_names
+    assert "cavity_b" in obj_names
+
+    build_items = root.findall("m:build/m:item", ns)
+    assert len(build_items) == len(objects)
+
+    scene = trimesh.load(out_3mf)
+    assert isinstance(scene, trimesh.Scene)
+    assert len(scene.geometry) == len(objects)

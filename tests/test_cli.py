@@ -183,3 +183,15 @@ def test_cli_graded_stl_infill_end(tmp_path, monkeypatch):
     )
     assert main() == 0
     assert (tmp_path / "graded_infill_end.stl").stat().st_size > 0
+
+
+def test_cli_3mf_export(tmp_path, monkeypatch):
+    import sys
+    import zipfile
+
+    out_3mf = str(tmp_path / "model.3mf")
+    monkeypatch.setattr(sys, "argv", ["pyroid-cli", "-o", out_3mf, "--res", "18"])
+    assert main() == 0
+    assert (tmp_path / "model.3mf").stat().st_size > 0
+    with zipfile.ZipFile(out_3mf, "r") as zf:
+        assert "3D/3dmodel.model" in zf.namelist()

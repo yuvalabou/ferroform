@@ -47,7 +47,7 @@ def test_drag_and_drop_stl(gui_window, tmp_path):
     gui_window.dropEvent(drop_event)
     assert drop_event.isAccepted()
     assert os.path.samefile(gui_window.stl_path_edit.text(), stl_path)
-    assert gui_window.tabs.currentIndex() == 1  # Switched to STL Conversion tab
+    assert gui_window.tabs.currentIndex() == 0  # Switched to STL Conversion tab
 
 
 def test_drag_and_drop_plotter_event_filter(gui_window, tmp_path):
@@ -67,7 +67,7 @@ def test_drag_and_drop_plotter_event_filter(gui_window, tmp_path):
 
     assert drop_event.isAccepted()
     assert os.path.samefile(gui_window.stl_path_edit.text(), stl_path)
-    assert gui_window.tabs.currentIndex() == 1
+    assert gui_window.tabs.currentIndex() == 0
 
 
 def test_drag_and_drop_preset_json(gui_window, tmp_path):
@@ -87,7 +87,7 @@ def test_drag_and_drop_preset_json(gui_window, tmp_path):
     gui_window.dropEvent(drop_event)
     assert drop_event.isAccepted()
 
-    assert gui_window.tabs.currentIndex() == 0  # Switched to Parametric tab
+    assert gui_window.tabs.currentIndex() == 1  # Switched to Parametric tab
     assert gui_window.params_widgets["res"].text() == "55"
     assert gui_window.params_widgets["a"].text() == "18.5"
     assert gui_window.params_widgets["wall_thickness"].text() == "0.4"

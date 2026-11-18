@@ -27,7 +27,7 @@ def parse_args():
         "-o",
         type=str,
         required=True,
-        help="Output mesh file path (.stl or .obj extension)",
+        help="Output mesh file path (.stl, .obj, or .3mf extension)",
     )
 
     # Geometry Type
@@ -193,6 +193,8 @@ def main():
 
     try:
         generator = GyroidGenerator()
+        ext = os.path.splitext(args.output)[1].lower()
+        include_cavities = ext == ".3mf"
 
         # Check if converting an STL file
         if args.input_stl:
@@ -248,7 +250,7 @@ def main():
                 grade_depth=args.grade_depth,
             )
             print(f"Converting STL volume to {args.tpms_type.title()} lattice...")
-            generator.convert_from_stl(stl_params, include_cavities=False)
+            generator.convert_from_stl(stl_params, include_cavities=include_cavities)
 
         else:
             # Standard parametric gyroid generation
@@ -299,13 +301,14 @@ def main():
                 print(f"Preset saved to {args.save_preset}")
 
             print("Generating parametric gyroid structure...")
-            generator.generate(include_cavities=False)
+            generator.generate(include_cavities=include_cavities)
 
         # Save output mesh
-        ext = os.path.splitext(args.output)[1].lower()
         match ext:
             case ".obj":
                 generator.save_obj(args.output)
+            case ".3mf":
+                generator.save_3mf(args.output, flat_cap=args.flat_cap)
             case _:
                 flat_cap = args.flat_cap
                 generator.save_stl(args.output, flat_cap=flat_cap)

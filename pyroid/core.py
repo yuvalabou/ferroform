@@ -4,11 +4,14 @@ Contains GyroidGenerator for computing parametric gyroid surfaces in cylindrical
 coordinates and coordinating STL mesh infill conversions.
 """
 
+import io
 import math
 import os
+import zipfile
 from collections.abc import Callable
 from dataclasses import asdict, fields
 from typing import Any
+from xml.sax.saxutils import escape as xml_escape
 
 import numpy as np
 import pyroid_rs
@@ -138,6 +141,30 @@ def prepare_for_printing(
     return tri
 
 
+def _extract_mesh_arrays(
+    mesh: pv.PolyData | trimesh.Trimesh,
+    flat_cap: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Extract (vertices, faces) arrays, using the Rust manifold fast path when available."""
+    if (
+        isinstance(mesh, pv.PolyData)
+        and getattr(mesh, "_rust_manifold", False)
+        and (not flat_cap or getattr(mesh, "_rust_flat_capped", False))
+        and (mesh.n_cells == 0 or mesh.faces.size == mesh.n_cells * 4)
+    ):
+        if mesh.n_cells == 0:
+            return np.empty((0, 3), dtype=np.float32), np.empty((0, 3), dtype=np.uint32)
+        pts = np.ascontiguousarray(mesh.points, dtype=np.float32)
+        tris = np.ascontiguousarray(mesh.faces.reshape((-1, 4))[:, 1:], dtype=np.uint32)
+        return pts, tris
+
+    tri = prepare_for_printing(mesh, flat_cap=flat_cap)
+    return (
+        np.ascontiguousarray(tri.vertices, dtype=np.float64),
+        np.ascontiguousarray(tri.faces, dtype=np.uint32),
+    )
+
+
 def export_stl_binary(
     mesh: pv.PolyData | trimesh.Trimesh,
     filepath: str,
@@ -160,12 +187,7 @@ def export_stl_binary(
         and (not flat_cap or getattr(mesh, "_rust_flat_capped", False))
         and (mesh.n_cells == 0 or mesh.faces.size == mesh.n_cells * 4)
     ):
-        if mesh.n_cells == 0:
-            pts = np.empty((0, 3), dtype=np.float32)
-            tris = np.empty((0, 3), dtype=np.uint32)
-        else:
-            pts = np.ascontiguousarray(mesh.points, dtype=np.float32)
-            tris = np.ascontiguousarray(mesh.faces.reshape((-1, 4))[:, 1:], dtype=np.uint32)
+        pts, tris = _extract_mesh_arrays(mesh, flat_cap=flat_cap)
         pyroid_rs.write_stl_binary(pts, tris, filepath, header_text)
         return
 
@@ -206,6 +228,83 @@ def export_stl_binary(
         f.write(header)
         f.write(np.uint32(n_faces).tobytes())
         f.write(data.tobytes())
+
+
+_CONTENT_TYPES_XML = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n'
+    '  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n'
+    '  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>\n'
+    "</Types>\n"
+)
+
+_RELS_XML = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">\n'
+    '  <Relationship Target="/3D/3dmodel.model" Id="rel0" '
+    'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>\n'
+    "</Relationships>\n"
+)
+
+
+def export_3mf(
+    meshes: dict[str, pv.PolyData | trimesh.Trimesh] | pv.PolyData | trimesh.Trimesh,
+    filepath: str,
+    flat_cap: bool = False,
+    unit: str = "millimeter",
+) -> None:
+    """Export one or more named meshes into a compressed multi-body 3MF archive."""
+    part_map = meshes if isinstance(meshes, dict) else {"lattice": meshes}
+
+    extracted: list[tuple[int, str, np.ndarray, np.ndarray]] = []
+    for idx, (name, mesh) in enumerate(part_map.items(), start=1):
+        pts, tris = _extract_mesh_arrays(mesh, flat_cap=flat_cap)
+        if len(pts) > 0 and len(tris) > 0:
+            extracted.append((idx, name, pts, tris))
+
+    if not extracted:
+        raise ValueError("No non-empty meshes to export")
+
+    model_buf = io.BytesIO()
+    model_buf.write(
+        (
+            f'<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<model unit="{xml_escape(unit)}" xml:lang="en-US" '
+            f'xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">\n'
+            f"  <resources>\n"
+        ).encode()
+    )
+
+    for obj_id, name, pts, tris in extracted:
+        safe_name = xml_escape(name, {'"': "&quot;"})
+        model_buf.write(
+            (
+                f'    <object id="{obj_id}" name="{safe_name}" type="model">\n'
+                f"      <mesh>\n"
+                f"        <vertices>\n"
+            ).encode()
+        )
+        np.savetxt(model_buf, pts, fmt='          <vertex x="%.6f" y="%.6f" z="%.6f"/>')
+        model_buf.write(
+            b"        </vertices>\n"
+            b"        <triangles>\n"
+        )
+        np.savetxt(model_buf, tris, fmt='          <triangle v1="%d" v2="%d" v3="%d"/>')
+        model_buf.write(
+            b"        </triangles>\n"
+            b"      </mesh>\n"
+            b"    </object>\n"
+        )
+
+    model_buf.write(b"  </resources>\n  <build>\n")
+    for obj_id, _, _, _ in extracted:
+        model_buf.write(f'    <item objectid="{obj_id}"/>\n'.encode())
+    model_buf.write(b"  </build>\n</model>\n")
+
+    with zipfile.ZipFile(filepath, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", _CONTENT_TYPES_XML)
+        zf.writestr("_rels/.rels", _RELS_XML)
+        zf.writestr("3D/3dmodel.model", model_buf.getvalue())
 
 
 def render_offscreen(
@@ -349,6 +448,25 @@ class GyroidGenerator:
         if self.mesh is None:
             raise ValueError("No mesh has been generated yet")
         self.mesh.save(filename)
+
+    def save_3mf(
+        self,
+        filename: str,
+        flat_cap: bool = False,
+        include_cavities: bool = True,
+    ) -> None:
+        """Save the generated mesh (and optional fluid cavities) as a multi-body 3MF archive."""
+        if self.mesh is None:
+            raise ValueError("No mesh has been generated yet")
+
+        parts: dict[str, pv.PolyData | trimesh.Trimesh] = {"lattice": self.mesh}
+        if include_cavities:
+            if self.cavity_a is not None and self.cavity_a.n_cells > 0:
+                parts["cavity_a"] = self.cavity_a
+            if self.cavity_b is not None and self.cavity_b.n_cells > 0:
+                parts["cavity_b"] = self.cavity_b
+
+        export_3mf(parts, filename, flat_cap=flat_cap)
 
     def save_screenshot(self, filename: str) -> None:
         """Save a rendered PNG thumbnail of the mesh."""

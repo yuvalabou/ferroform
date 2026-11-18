@@ -261,7 +261,7 @@ def main():
                 try:
                     with open(args.load_preset, "r") as f:
                         params_dict.update(json.load(f))
-                except Exception as e:
+                except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
                     print(f"Error loading preset file: {e}")
                     return 1
 
@@ -319,7 +319,7 @@ def main():
 
         return 0
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Error: {e}")
         return 1
 

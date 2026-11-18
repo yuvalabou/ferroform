@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import fields
 from typing import Any
 
+import numpy as np
 import pyroid_rs
 import pyvista as pv
 
@@ -44,8 +45,8 @@ class GyroidGenerator:
         self.cavity_b: pv.PolyData | None = None
         self._reference_volume: float | None = None
         self.last_stl_params: STLConversionParams | None = None
-        self._input_bounds = None
-        self._input_surface_points = None
+        self._input_bounds: np.ndarray | None = None
+        self._input_surface_points: np.ndarray | None = None
 
     def validate_params(self) -> tuple[bool, str]:
         """Validate parameters using the GyroidParams data model."""
@@ -115,7 +116,7 @@ class GyroidGenerator:
         self._reference_volume = float(abs(tri_mesh.volume))
         self.last_stl_params = stl_params
         self._input_bounds = tri_mesh.bounds.copy()
-        verts = tri_mesh.vertices
+        verts = np.asarray(tri_mesh.vertices)
         if len(verts) > 20000:
             step = max(1, len(verts) // 20000)
             verts = verts[::step]

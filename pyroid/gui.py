@@ -62,7 +62,7 @@ class GeneratorWorker(QThread):
             generator = self.task_fn(_report)
             self.progress.emit(100)
             self.finished.emit(generator)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.error.emit(str(e))
 
 
@@ -711,7 +711,7 @@ class GyroidGeneratorGUI(QMainWindow):
                 with open(name, "w") as f:
                     json.dump(params.to_dict(), f, indent=4)
                 QMessageBox.information(self, "Success", f"Preset saved as {name}")
-            except Exception as e:
+            except (OSError, TypeError, ValueError) as e:
                 QMessageBox.critical(self, "Error", f"Failed to save preset: {e!s}")
 
     def get_params_from_ui(self) -> GyroidParams:
@@ -805,8 +805,8 @@ class GyroidGeneratorGUI(QMainWindow):
                 self.stats_box.setVisible(False)
                 self._refresh_stl_preview(reset_camera=True)
                 self._update_grading_feedback()
-        except Exception:
-            pass
+        except (OSError, RuntimeError, ValueError) as e:
+            self.status_bar.showMessage(f"Preview skipped: {e!s}", 4000)
 
     def load_preset_file(self, file_path: str):
         """Load parameter preset from a JSON file."""
@@ -814,7 +814,7 @@ class GyroidGeneratorGUI(QMainWindow):
             with open(file_path, "r", encoding="utf-8") as f:
                 preset_data = json.load(f)
             if not isinstance(preset_data, dict):
-                raise ValueError("Preset file must contain a JSON object.")
+                raise TypeError("Preset file must contain a JSON object.")
             for k, v in preset_data.items():
                 if k in self.params_widgets:
                     self.params_widgets[k].setText(str(v))
@@ -824,7 +824,7 @@ class GyroidGeneratorGUI(QMainWindow):
                     self.param_tpms_combo.setCurrentIndex(idx)
             self.tabs.setCurrentIndex(0)
             self.status_bar.showMessage(f"Loaded preset: {os.path.basename(file_path)}")
-        except Exception as e:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as e:
             QMessageBox.warning(self, "Invalid Preset", f"Failed to load preset: {e!s}")
 
     def on_browse_stl(self):
@@ -859,7 +859,7 @@ class GyroidGeneratorGUI(QMainWindow):
             self.worker.progress.connect(self.progressBar.setValue)
             self.worker.status.connect(self.status_bar.showMessage)
             self.worker.start()
-        except Exception as e:
+        except (RuntimeError, TypeError, ValueError) as e:
             QMessageBox.critical(self, "Error", str(e))
             self.generate_btn.setEnabled(True)
 
@@ -937,7 +937,7 @@ class GyroidGeneratorGUI(QMainWindow):
             self.worker.progress.connect(self.progressBar.setValue)
             self.worker.status.connect(self.status_bar.showMessage)
             self.worker.start()
-        except Exception as e:
+        except (RuntimeError, TypeError, ValueError) as e:
             QMessageBox.critical(self, "Error", f"Invalid parameters: {e!s}")
 
     def on_cell_override_toggled(self, checked: bool):

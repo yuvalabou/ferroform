@@ -33,7 +33,10 @@ def load_trimesh(filepath: str) -> trimesh.Trimesh:
     """Load an STL file as a Trimesh object."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"STL file not found: {filepath}")
-    return trimesh.load(filepath, force="mesh")
+    loaded = trimesh.load(filepath, force="mesh")
+    if not isinstance(loaded, trimesh.Trimesh):
+        raise TypeError(f"Expected a Trimesh object from {filepath}, got {type(loaded).__name__}")
+    return loaded
 
 
 def convert_stl_to_gyroid(
@@ -209,8 +212,8 @@ def render_offscreen(
     """Render a thumbnail image of the mesh headlessly."""
     plotter = pv.Plotter(off_screen=True)
     plotter.add_mesh(mesh, color="lightblue", show_edges=True)
-    plotter.add_bounding_box()
-    plotter.show_axes()
-    plotter.reset_camera()
+    plotter.add_bounding_box()  # type: ignore[call-arg]
+    plotter.show_axes()  # type: ignore[call-arg]
+    plotter.reset_camera()  # type: ignore[call-arg]
     plotter.screenshot(output_image_path, window_size=window_size)
     plotter.close()

@@ -67,3 +67,10 @@ python_files = "test_*.py"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.mypy]
+python_version = "3.12"
+
+[[tool.mypy.overrides]]
+module = ["pyroid_rs", "qdarkstyle", "scipy.*"]
+ignore_missing_imports = true

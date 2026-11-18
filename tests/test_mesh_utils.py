@@ -6,15 +6,14 @@ import pyvista as pv
 import trimesh
 
 from pyroid import mesh_utils
+from pyroid.core import GyroidGenerator
 from pyroid.mesh_utils import (
     convert_stl_to_gyroid,
     export_stl_binary,
     load_trimesh,
     prepare_for_printing,
 )
-from pyroid.core import GyroidGenerator
-from pyroid.models import GyroidParams
-from pyroid.models import STLConversionParams
+from pyroid.models import GyroidParams, STLConversionParams
 
 
 def test_stl_gyroid_conversion(tmp_path):

@@ -21,10 +21,31 @@ use crate::marching::{
 };
 use crate::tpms::TpmsType;
 
-/// Parameters for radially symmetrical parametric TPMS generation.
+/// Domain shape for parametric TPMS generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ParametricShape {
+    #[default]
+    Cylinder,
+    Box,
+}
+
+impl ParametricShape {
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "" | "cylinder" | "circle" | "radial" => Ok(Self::Cylinder),
+            "box" | "cube" | "cartesian" => Ok(Self::Box),
+            other => Err(format!(
+                "Unknown parametric shape: '{other}'. Expected 'cylinder' or 'box'"
+            )),
+        }
+    }
+}
+
+/// Parameters for parametric TPMS generation (cylindrical or Cartesian box).
 #[derive(Clone, Debug)]
 pub struct ParametricParams {
     pub tpms_type: TpmsType,
+    pub shape: ParametricShape,
     pub res: usize,
     pub a: f64,
     pub b: f64,
@@ -47,11 +68,13 @@ impl ParametricParams {
         if self.a <= 0.0 || self.b <= 0.0 || self.c <= 0.0 {
             return Err("Dimensions (a, b, c) must be positive values".to_string());
         }
-        if self.r1 < 0.0 {
-            return Err("Inner radius (r1) must be non-negative".to_string());
-        }
-        if self.wall_thickness <= 0.0 {
-            return Err("Wall thickness must be positive".to_string());
+        if self.shape == ParametricShape::Cylinder {
+            if self.r1 < 0.0 {
+                return Err("Inner radius (r1) must be non-negative".to_string());
+            }
+            if self.wall_thickness <= 0.0 {
+                return Err("Wall thickness must be positive".to_string());
+            }
         }
         if self.cell_radius <= 0.0 || self.cell_height <= 0.0 {
             return Err("Cell radius and height must be positive".to_string());
@@ -166,7 +189,7 @@ fn linspace(start: f64, stop: f64, n: usize) -> Vec<f64> {
     (0..n).map(|i| start + (i as f64) * step).collect()
 }
 
-/// Generate a radially symmetrical parametric TPMS structure and dual cavities.
+/// Generate a parametric TPMS structure (cylindrical or Cartesian box) and dual cavities.
 pub fn generate_parametric(
     params: &ParametricParams,
     mut progress: impl FnMut(i32, &str),
@@ -174,60 +197,112 @@ pub fn generate_parametric(
     params.validate()?;
 
     let res = params.res;
-    progress(10, &format!("Initializing cylindrical grid (res={res})..."));
-
-    let ky = 2.0 * PI / params.b;
-    let r_aux = linspace(0.0, params.a, res);
-    let phis = linspace(0.0, params.b, res);
-    let zs = linspace(0.0, params.c, res);
-
-    let r_slope = (params.r2 - params.r1) / params.a;
-    let rs: Vec<f64> = r_aux.iter().map(|&ra| r_slope * ra + params.r1).collect();
-    let r_min = params.r1 - params.wall_thickness;
-    let mask_i: Vec<bool> = rs.iter().map(|&r| r >= r_min && r <= params.r1).collect();
-
-    progress(
-        35,
-        &format!(
-            "Evaluating radial {} scalar field...",
-            params.tpms_type.display_name()
-        ),
-    );
+    let total = res * res * res;
+    let mut main_field = vec![1.0; total];
 
     let scale_x = 2.0 * PI * params.cell_radius / params.a;
     let scale_y = 2.0 * PI * params.cell_radius / params.b;
     let scale_z = 2.0 * PI * params.cell_height / params.c;
 
-    let total = res * res * res;
-    let mut main_field = vec![1.0; total];
-    main_field
-        .par_chunks_mut(res * res)
-        .enumerate()
-        .for_each(|(i, slab)| {
-            if !mask_i[i] {
-                return;
-            }
-            let x = r_aux[i] * scale_x;
-            for (j, &phi) in phis.iter().enumerate() {
-                let y = phi * params.phi_scale * scale_y;
-                let row_off = j * res;
-                for (k, &z) in zs.iter().enumerate() {
-                    slab[row_off + k] =
-                        params.tpms_type.eval_radial(x, y, z * scale_z) + params.bias;
-                }
-            }
-        });
+    let zs = linspace(0.0, params.c, res);
 
-    progress(60, "Transforming coordinates to Cartesian...");
+    // Coordinate grid and field evaluation differ by shape; cavity extraction shares the rest.
+    let (mask_i, jk_bounds, xs_or_rs, ys_or_phis, cyl_ky) = match params.shape {
+        ParametricShape::Cylinder => {
+            progress(10, &format!("Initializing cylindrical grid (res={res})..."));
+            let ky = 2.0 * PI / params.b;
+            let r_aux = linspace(0.0, params.a, res);
+            let phis = linspace(0.0, params.b, res);
+
+            let r_slope = (params.r2 - params.r1) / params.a;
+            let rs: Vec<f64> = r_aux.iter().map(|&ra| r_slope * ra + params.r1).collect();
+            let r_min = params.r1 - params.wall_thickness;
+            let mask_i: Vec<bool> = rs.iter().map(|&r| r >= r_min && r <= params.r1).collect();
+
+            progress(
+                35,
+                &format!(
+                    "Evaluating radial {} scalar field...",
+                    params.tpms_type.display_name()
+                ),
+            );
+
+            main_field
+                .par_chunks_mut(res * res)
+                .enumerate()
+                .for_each(|(i, slab)| {
+                    if !mask_i[i] {
+                        return;
+                    }
+                    let x = r_aux[i] * scale_x;
+                    for (j, &phi) in phis.iter().enumerate() {
+                        let y = phi * params.phi_scale * scale_y;
+                        let row_off = j * res;
+                        for (k, &z) in zs.iter().enumerate() {
+                            slab[row_off + k] =
+                                params.tpms_type.eval_radial(x, y, z * scale_z) + params.bias;
+                        }
+                    }
+                });
+
+            progress(60, "Transforming coordinates to Cartesian...");
+            (mask_i, (0..res, 0..res), rs, phis, Some(ky))
+        }
+        ParametricShape::Box => {
+            progress(10, &format!("Initializing box grid (res={res})..."));
+            let xs = linspace(-params.a * 0.5, params.a * 0.5, res);
+            let ys = linspace(-params.b * 0.5, params.b * 0.5, res);
+            let mask_i: Vec<bool> = (0..res).map(|i| i > 0 && i + 1 < res).collect();
+
+            progress(
+                35,
+                &format!(
+                    "Evaluating Cartesian {} scalar field...",
+                    params.tpms_type.display_name()
+                ),
+            );
+
+            let inner_end = res.saturating_sub(1);
+            main_field
+                .par_chunks_mut(res * res)
+                .enumerate()
+                .for_each(|(i, slab)| {
+                    if !mask_i[i] {
+                        return;
+                    }
+                    let x = xs[i] * scale_x;
+                    for j in 1..inner_end {
+                        let y = ys[j] * scale_y;
+                        let row_off = j * res;
+                        for k in 1..inner_end {
+                            slab[row_off + k] =
+                                params.tpms_type.eval(x, y, zs[k] * scale_z) + params.bias;
+                        }
+                    }
+                });
+
+            progress(60, "Preparing Cartesian box domain...");
+            (mask_i, (1..inner_end, 1..inner_end), xs, ys, None)
+        }
+    };
+
+    let extract = |field: &[f64]| -> MeshData {
+        let mut m = match cyl_ky {
+            Some(ky) => extract_isosurface_cylindrical(&xs_or_rs, &ys_or_phis, &zs, ky, field),
+            None => extract_isosurface_cartesian(&xs_or_rs, &ys_or_phis, &zs, field),
+        };
+        manifold::ensure_positive_volume(&mut m);
+        m
+    };
+
     progress(80, "Extracting isosurface contour...");
-
-    let mut mesh = extract_isosurface_cylindrical(&rs, &phis, &zs, ky, &main_field);
-    manifold::ensure_positive_volume(&mut mesh);
+    let mesh = extract(&main_field);
 
     let (cavity_a, cavity_b) = if params.include_cavities {
         let t_sheet = 0.2 * (params.tpms_type.thickness_multiplier() / 4.80);
         let mut cav_a_field = vec![1.0; total];
         let mut cav_b_field = vec![1.0; total];
+        let (j_range, k_range) = jk_bounds;
 
         cav_a_field
             .par_chunks_mut(res * res)
@@ -238,18 +313,18 @@ pub fn generate_parametric(
                     return;
                 }
                 let m_slab = &main_field[i * res * res..(i + 1) * res * res];
-                for idx in 0..res * res {
-                    let g = m_slab[idx];
-                    a_slab[idx] = t_sheet - g;
-                    b_slab[idx] = g + t_sheet;
+                for j in j_range.clone() {
+                    let row_off = j * res;
+                    for k in k_range.clone() {
+                        let idx = row_off + k;
+                        let g = m_slab[idx];
+                        a_slab[idx] = t_sheet - g;
+                        b_slab[idx] = g + t_sheet;
+                    }
                 }
             });
 
-        let mut cav_a = extract_isosurface_cylindrical(&rs, &phis, &zs, ky, &cav_a_field);
-        manifold::ensure_positive_volume(&mut cav_a);
-        let mut cav_b = extract_isosurface_cylindrical(&rs, &phis, &zs, ky, &cav_b_field);
-        manifold::ensure_positive_volume(&mut cav_b);
-        (Some(cav_a), Some(cav_b))
+        (Some(extract(&cav_a_field)), Some(extract(&cav_b_field)))
     } else {
         (None, None)
     };
@@ -663,31 +738,34 @@ mod tests {
             TpmsType::Neovius,
         ];
         for tpms_type in tpms_list {
-            let params = ParametricParams {
-                tpms_type,
-                res: 24,
-                a: 24.0,
-                b: 24.0,
-                c: 10.0,
-                r1: 12.0,
-                r2: 0.0,
-                phi_scale: 8.0,
-                wall_thickness: 11.5,
-                cell_radius: 2.0,
-                cell_height: 3.0,
-                bias: 0.0,
-                include_cavities: true,
-            };
-            let mut updates = Vec::new();
-            let out = generate_parametric(&params, |pct, msg| {
-                updates.push((pct, msg.to_string()));
-            })
-            .unwrap();
-            assert!(out.mesh.n_points() > 0);
-            assert!(out.mesh.n_cells() > 0);
-            assert!(out.cavity_a.as_ref().unwrap().n_cells() > 0);
-            assert!(out.cavity_b.as_ref().unwrap().n_cells() > 0);
-            assert!(updates.len() >= 4);
+            for shape in [ParametricShape::Cylinder, ParametricShape::Box] {
+                let params = ParametricParams {
+                    tpms_type,
+                    shape,
+                    res: 24,
+                    a: 24.0,
+                    b: 24.0,
+                    c: 10.0,
+                    r1: 12.0,
+                    r2: 0.0,
+                    phi_scale: 8.0,
+                    wall_thickness: 11.5,
+                    cell_radius: 2.0,
+                    cell_height: 3.0,
+                    bias: 0.0,
+                    include_cavities: true,
+                };
+                let mut updates = Vec::new();
+                let out = generate_parametric(&params, |pct, msg| {
+                    updates.push((pct, msg.to_string()));
+                })
+                .unwrap();
+                assert!(out.mesh.n_points() > 0);
+                assert!(out.mesh.n_cells() > 0);
+                assert!(out.cavity_a.as_ref().unwrap().n_cells() > 0);
+                assert!(out.cavity_b.as_ref().unwrap().n_cells() > 0);
+                assert!(updates.len() >= 4);
+            }
         }
     }
 

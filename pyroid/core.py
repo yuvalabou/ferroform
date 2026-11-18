@@ -276,11 +276,14 @@ class GyroidGenerator:
         self.mesh = polydata_from_buffers(*mesh_buf, rust_manifold=True)
         self.cavity_a = polydata_from_buffers(*cav_a_buf) if include_cavities else None
         self.cavity_b = polydata_from_buffers(*cav_b_buf) if include_cavities else None
-        r_inner = max(0.0, self.params.r1 - self.params.wall_thickness)
-        r_outer = self.params.r1
-        self._reference_volume = (
-            math.pi * max(0.0, r_outer**2 - r_inner**2) * self.params.c
-        )
+        if self.params.shape.strip().lower() in ("box", "cube", "cartesian"):
+            self._reference_volume = self.params.a * self.params.b * self.params.c
+        else:
+            r_inner = max(0.0, self.params.r1 - self.params.wall_thickness)
+            r_outer = self.params.r1
+            self._reference_volume = (
+                math.pi * max(0.0, r_outer**2 - r_inner**2) * self.params.c
+            )
         self.last_stl_params = None
         self._input_bounds = None
         self._input_surface_points = None

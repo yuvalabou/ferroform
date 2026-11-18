@@ -225,12 +225,24 @@ class GyroidGeneratorGUI(QMainWindow):
         self.param_tpms_combo, self.param_tpms_desc = self._add_tpms_selector(
             tpms_layout, "TPMS Type:"
         )
+        shape_row = QHBoxLayout()
+        shape_row.addWidget(QLabel("Domain Shape:"))
+        self.param_shape_combo = QComboBox()
+        self.param_shape_combo.addItem("Cylinder (Radial)", "cylinder")
+        self.param_shape_combo.addItem("Box (Cartesian)", "box")
+        self.param_shape_combo.setToolTip(
+            "Choose between a radially symmetrical cylinder or a Cartesian box domain."
+        )
+        self.param_shape_combo.currentIndexChanged.connect(self._on_param_shape_changed)
+        shape_row.addWidget(self.param_shape_combo)
+        tpms_layout.addLayout(shape_row)
         param_tab_layout.addWidget(tpms_box)
 
         # Parameters Section
         params_box = QGroupBox("Parameters")
         params_layout = QVBoxLayout(params_box)
         self.params_widgets = {}
+        self._param_label_widgets: dict[str, QLabel] = {}
         param_descriptions = GyroidGenerator.get_param_descriptions()
         param_labels = {
             "res": "Resolution",
@@ -255,6 +267,7 @@ class GyroidGeneratorGUI(QMainWindow):
             line_edit.setToolTip(tip)
             row.addWidget(line_edit)
             self.params_widgets[k] = line_edit
+            self._param_label_widgets[k] = lbl
             params_layout.addLayout(row)
         param_tab_layout.addWidget(params_box)
 
@@ -693,6 +706,14 @@ class GyroidGeneratorGUI(QMainWindow):
         self.apply_preset(preset_name)
         self.current_preset = preset_name
 
+    def _on_param_shape_changed(self):
+        is_cylinder = self.param_shape_combo.currentData() == "cylinder"
+        for key in ("r1", "r2", "phi_scale", "wall_thickness"):
+            if key in self.params_widgets:
+                self.params_widgets[key].setEnabled(is_cylinder)
+            if key in self._param_label_widgets:
+                self._param_label_widgets[key].setEnabled(is_cylinder)
+
     def apply_preset(self, preset_name):
         presets = GyroidGenerator.get_presets()
         if preset_name in presets:
@@ -704,6 +725,12 @@ class GyroidGeneratorGUI(QMainWindow):
                 idx = self.param_tpms_combo.findData(data["tpms_type"])
                 if idx >= 0:
                     self.param_tpms_combo.setCurrentIndex(idx)
+            if hasattr(self, "param_shape_combo"):
+                shape = data.get("shape", "cylinder")
+                idx = self.param_shape_combo.findData(shape)
+                if idx >= 0:
+                    self.param_shape_combo.setCurrentIndex(idx)
+                self._on_param_shape_changed()
 
     def save_current_as_preset(self):
         name, ok = QFileDialog.getSaveFileName(self, "Save Preset", "", "Preset Files (*.json)")
@@ -725,6 +752,8 @@ class GyroidGeneratorGUI(QMainWindow):
             raw_dict[k] = int(val) if k == "res" else float(val or 0.0)
         if hasattr(self, "param_tpms_combo"):
             raw_dict["tpms_type"] = self.param_tpms_combo.currentData()
+        if hasattr(self, "param_shape_combo"):
+            raw_dict["shape"] = self.param_shape_combo.currentData()
         return GyroidParams.from_dict(raw_dict)
 
     def eventFilter(self, watched, event):

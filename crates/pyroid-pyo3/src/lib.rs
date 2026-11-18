@@ -11,7 +11,9 @@ use pyroid_core::grading::{GradingMode, GradingParams};
 use pyroid_core::manifold::{write_binary_stl_slices, DEFAULT_STL_HEADER};
 use pyroid_core::marching::MeshData;
 use pyroid_core::tpms::TpmsType;
-use pyroid_core::{convert_stl, generate_parametric, ParametricParams, StlParams};
+use pyroid_core::{
+    convert_stl, generate_parametric, ParametricParams, ParametricShape, StlParams,
+};
 
 type MeshArrays<'py> = (Bound<'py, PyArray2<f32>>, Bound<'py, PyArray1<i64>>);
 
@@ -45,8 +47,11 @@ fn mesh_to_py<'py>(py: Python<'py>, mesh: MeshData) -> PyResult<MeshArrays<'py>>
 fn parse_parametric_params(params: &Bound<'_, PyDict>) -> PyResult<ParametricParams> {
     let tpms_str: String = dict_get(params, "tpms_type")?;
     let tpms_type = TpmsType::from_str(&tpms_str).map_err(PyValueError::new_err)?;
+    let shape_str = dict_get_opt::<String>(params, "shape")?.unwrap_or_else(|| "cylinder".to_string());
+    let shape = ParametricShape::from_str(&shape_str).map_err(PyValueError::new_err)?;
     Ok(ParametricParams {
         tpms_type,
+        shape,
         res: dict_get(params, "res")?,
         a: dict_get(params, "a")?,
         b: dict_get(params, "b")?,

@@ -111,13 +111,17 @@ def get_all_tpms_kernels() -> list[TPMSKernel]:
 
 @dataclass(slots=True)
 class GyroidParams:
-    """Parameters for generating radially symmetrical gyroid structures."""
+    """Parameters for generating parametric TPMS structures (cylindrical or Cartesian box)."""
 
     tpms_type: str = field(
         default="gyroid",
         metadata={
             "help": "TPMS geometry: gyroid, diamond, primitive, i_wp, fischer_koch_s, neovius"
         },
+    )
+    shape: str = field(
+        default="cylinder",
+        metadata={"help": "Domain shape: cylinder (radial) or box (Cartesian)"},
     )
     res: int = field(
         default=80,
@@ -158,12 +162,16 @@ class GyroidParams:
             return False, str(e)
         if not isinstance(self.res, int) or self.res <= 0:
             return False, "Resolution must be a positive integer"
+        shape_clean = (self.shape or "cylinder").strip().lower()
+        if shape_clean not in ("cylinder", "circle", "radial", "box", "cube", "cartesian"):
+            return False, f"Unknown shape: '{self.shape}'. Expected 'cylinder' or 'box'"
         if self.a <= 0 or self.b <= 0 or self.c <= 0:
             return False, "Dimensions (a, b, c) must be positive values"
-        if self.r1 < 0:
-            return False, "Inner radius (r1) must be non-negative"
-        if self.wall_thickness <= 0:
-            return False, "Wall thickness must be positive"
+        if shape_clean in ("cylinder", "circle", "radial"):
+            if self.r1 < 0:
+                return False, "Inner radius (r1) must be non-negative"
+            if self.wall_thickness <= 0:
+                return False, "Wall thickness must be positive"
         if self.cell_radius <= 0 or self.cell_height <= 0:
             return False, "Cell radius and height must be positive"
         if not (-1.4 <= self.bias <= 1.4):

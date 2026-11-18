@@ -117,3 +117,25 @@ def test_stl_grading_validation_and_generation(tmp_path):
     assert mesh.volume > 0
     assert gen.cavity_a is not None and gen.cavity_a.n_cells > 0
     assert gen.cavity_b is not None and gen.cavity_b.n_cells > 0
+
+
+def test_box_parametric_generation():
+    bad_shape = GyroidParams(shape="pyramid")
+    valid, err = bad_shape.validate()
+    assert not valid
+    assert "shape" in err.lower()
+
+    params = GyroidParams(shape="box", res=24, a=20.0, b=16.0, c=10.0)
+    assert params.validate() == (True, "")
+    gen = GyroidGenerator(params)
+    mesh = gen.generate(include_cavities=True)
+
+    assert isinstance(mesh, pv.PolyData)
+    assert mesh.n_cells > 0
+    assert mesh.volume > 0
+    assert gen.cavity_a is not None and gen.cavity_a.n_cells > 0
+    assert gen.cavity_b is not None and gen.cavity_b.n_cells > 0
+    xmin, xmax, ymin, ymax, zmin, zmax = mesh.bounds
+    assert xmin >= -10.1 and xmax <= 10.1
+    assert ymin >= -8.1 and ymax <= 8.1
+    assert zmin >= -0.1 and zmax <= 10.1

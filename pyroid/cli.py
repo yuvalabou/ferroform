@@ -133,6 +133,13 @@ def parse_args():
     # Parametric Gyroid Group
     param_group = parser.add_argument_group("Parametric Gyroid Parameters")
     param_group.add_argument(
+        "--shape",
+        type=str,
+        choices=["cylinder", "box"],
+        default="cylinder",
+        help="Parametric domain shape: cylinder (radial) or box (Cartesian)",
+    )
+    param_group.add_argument(
         "--res", type=int, default=80, help="Resolution of the grid in each dimension"
     )
     param_group.add_argument("--a", type=float, default=24, help="X-axis length")
@@ -269,6 +276,7 @@ def main():
             param_wall = args.wall_thickness if args.wall_thickness is not None else 11.5
             cli_overrides = {
                 "tpms_type": args.tpms_type,
+                "shape": args.shape,
                 "res": args.res,
                 "a": args.a,
                 "b": args.b,

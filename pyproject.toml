@@ -52,6 +52,13 @@ python-packages = ["pyroid"]
 override-dependencies = [
     "pyqt5-qt5==5.15.2"
 ]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "Cargo.lock" },
+    { file = "crates/**/*.rs" },
+    { file = "crates/**/Cargo.toml" },
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

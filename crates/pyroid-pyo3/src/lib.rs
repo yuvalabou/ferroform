@@ -7,6 +7,7 @@ use pyo3::exceptions::{PyIOError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyroid_core::csg::trim_flat_cap as rust_trim_flat_cap;
+use pyroid_core::grading::{GradingMode, GradingParams};
 use pyroid_core::manifold::{write_binary_stl_slices, DEFAULT_STL_HEADER};
 use pyroid_core::marching::MeshData;
 use pyroid_core::tpms::TpmsType;
@@ -64,6 +65,15 @@ fn parse_parametric_params(params: &Bound<'_, PyDict>) -> PyResult<ParametricPar
 fn parse_stl_params(params: &Bound<'_, PyDict>) -> PyResult<StlParams> {
     let tpms_str: String = dict_get(params, "tpms_type")?;
     let tpms_type = TpmsType::from_str(&tpms_str).map_err(PyValueError::new_err)?;
+    let grade_mode_str = dict_get_opt::<String>(params, "grade_mode")?.unwrap_or_default();
+    let grade_mode = GradingMode::from_str(&grade_mode_str).map_err(PyValueError::new_err)?;
+    let grading = GradingParams {
+        mode: grade_mode,
+        wall_thickness_end: dict_get_opt(params, "grade_wall_end")?,
+        bias_end: dict_get_opt(params, "grade_bias_end")?,
+        cell_size_end: dict_get_opt(params, "grade_cell_end")?,
+        transition_depth: dict_get_opt(params, "grade_depth")?,
+    };
     Ok(StlParams {
         tpms_type,
         resolution: dict_get(params, "resolution")?,
@@ -76,6 +86,7 @@ fn parse_stl_params(params: &Bound<'_, PyDict>) -> PyResult<StlParams> {
         is_skeletal: dict_get(params, "is_skeletal")?,
         infill_percent: dict_get_opt(params, "infill_percent")?,
         include_cavities: dict_get_opt(params, "include_cavities")?.unwrap_or(true),
+        grading,
     })
 }
 

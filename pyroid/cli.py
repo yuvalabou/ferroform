@@ -92,6 +92,43 @@ def parse_args():
         default=0.0,
         help="Cavity A/B volume balance offset (-1.0 to 1.0)",
     )
+    stl_group.add_argument(
+        "--grade-mode",
+        type=str,
+        default="none",
+        choices=["none", "shell_to_core", "axial_x", "axial_y", "axial_z", "radial"],
+        help="Spatial grading profile for STL lattice conversion",
+    )
+    stl_group.add_argument(
+        "--grade-wall-end",
+        type=float,
+        default=None,
+        help="Target wall thickness (mm) at grading end (core / max axis / outer radius)",
+    )
+    stl_group.add_argument(
+        "--grade-bias-end",
+        type=float,
+        default=None,
+        help="Target cavity bias (-1.4 to 1.4) at grading end",
+    )
+    stl_group.add_argument(
+        "--grade-cell-end",
+        type=float,
+        default=None,
+        help="Target unit cell size (mm) at grading end",
+    )
+    stl_group.add_argument(
+        "--grade-infill-end",
+        type=float,
+        default=None,
+        help="Target solid infill %% (1 to 99) at grading end (auto-computes --grade-wall-end)",
+    )
+    stl_group.add_argument(
+        "--grade-depth",
+        type=float,
+        default=None,
+        help="Transition depth (mm) from outer surface for shell_to_core grading (None = auto)",
+    )
 
     # Parametric Gyroid Group
     param_group = parser.add_argument_group("Parametric Gyroid Parameters")
@@ -161,6 +198,30 @@ def main():
                 if args.infill is not None
                 else args.cell_size
             )
+            grade_wall_end = args.grade_wall_end
+            if grade_wall_end is None and args.grade_infill_end is not None:
+                from pyroid.tpms import get_tpms_kernel
+
+                target_cell = args.grade_cell_end if args.grade_cell_end is not None else cell_size
+                end_pct = min(99.0, max(1.0, args.grade_infill_end))
+                if args.skeletal:
+                    ratio = max(0.05, 0.2 + (end_pct - 50.0) / 95.5)
+                    grade_wall_end = target_cell * ratio
+                else:
+                    factor = get_tpms_kernel(args.tpms_type).surface_factor
+                    grade_wall_end = max(0.05, (end_pct * target_cell) / max(factor, 1e-6))
+
+            if (
+                args.grade_mode != "none"
+                and grade_wall_end is None
+                and args.grade_bias_end is None
+                and args.grade_cell_end is None
+            ):
+                print(
+                    f"Warning: --grade-mode={args.grade_mode} set without any --grade-*-end value; "
+                    "lattice will remain uniform."
+                )
+
             stl_params = STLConversionParams(
                 stl_path=args.input_stl,
                 tpms_type=args.tpms_type,
@@ -173,6 +234,11 @@ def main():
                 shell_thickness=args.shell_thickness,
                 is_skeletal=args.skeletal,
                 infill_percent=args.infill,
+                grade_mode=args.grade_mode,
+                grade_wall_end=grade_wall_end,
+                grade_bias_end=args.grade_bias_end,
+                grade_cell_end=args.grade_cell_end,
+                grade_depth=args.grade_depth,
             )
             print(f"Converting STL volume to {args.tpms_type.title()} lattice...")
             generator.convert_from_stl(stl_params, include_cavities=False)

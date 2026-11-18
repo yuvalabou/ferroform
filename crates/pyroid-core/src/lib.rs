@@ -3,6 +3,7 @@
 pub mod bvh;
 pub mod csg;
 pub mod edt;
+pub mod grading;
 pub mod manifold;
 pub mod marching;
 mod mc_tables;
@@ -12,6 +13,9 @@ use std::f64::consts::PI;
 
 use rayon::prelude::*;
 
+use crate::grading::{
+    compute_grading_factors, eval_tpms_with_grading, lerp, GradingMode, GradingParams,
+};
 use crate::marching::{
     extract_isosurface_cartesian, extract_isosurface_cylindrical, MeshData,
 };
@@ -73,6 +77,7 @@ pub struct StlParams {
     pub is_skeletal: bool,
     pub infill_percent: Option<f64>,
     pub include_cavities: bool,
+    pub grading: GradingParams,
 }
 
 pub type InfillParams = StlParams;
@@ -101,6 +106,7 @@ impl StlParams {
                 "Shell thickness must be positive when shell preservation is enabled".to_string(),
             );
         }
+        self.grading.validate()?;
         Ok(())
     }
 }
@@ -316,6 +322,43 @@ pub fn convert_stl(
 
     let inside_3d = bvh::compute_containment_grid(vertices, faces, &xs, &ys, &zs);
 
+    let is_shell_void = params.preserve_shell && params.shell_thickness > 0.0;
+    let grading_active = params.grading.is_active();
+    let need_edt =
+        is_shell_void || (grading_active && params.grading.mode == GradingMode::ShellToCore);
+
+    let dx = grid_extent[0] / ((nx - 1).max(1) as f64);
+    let dy = grid_extent[1] / ((ny - 1).max(1) as f64);
+    let dz = grid_extent[2] / ((nz - 1).max(1) as f64);
+
+    let dist_inside = if need_edt {
+        progress(
+            38,
+            if is_shell_void {
+                "Computing shell distance transform..."
+            } else {
+                "Computing interior distance transform for grading..."
+            },
+        );
+        Some(edt::edt_3d(&inside_3d, nx, ny, nz, dx, dy, dz))
+    } else {
+        None
+    };
+
+    let u_field = if grading_active {
+        Some(compute_grading_factors(
+            &params.grading,
+            &xs,
+            &ys,
+            &zs,
+            min_b,
+            extent,
+            dist_inside.as_deref(),
+        ))
+    } else {
+        None
+    };
+
     progress(
         50,
         &format!(
@@ -324,22 +367,51 @@ pub fn convert_stl(
         ),
     );
 
-    let is_shell_void = params.preserve_shell && params.shell_thickness > 0.0;
+    let center = [
+        min_b[0] + 0.5 * extent[0],
+        min_b[1] + 0.5 * extent[1],
+        min_b[2] + 0.5 * extent[2],
+    ];
     let k_wave = 2.0 * PI / params.cell_size.max(0.001);
     let mut scalar_val = vec![0.0; total];
     scalar_val
         .par_chunks_mut(ny * nz)
         .enumerate()
         .for_each(|(i, slab)| {
-            let kx = k_wave * xs[i];
+            let x = xs[i];
+            let kx = k_wave * x;
             let in_slab = &inside_3d[i * ny * nz..(i + 1) * ny * nz];
+            let u_slab = u_field
+                .as_ref()
+                .map(|uf| &uf[i * ny * nz..(i + 1) * ny * nz]);
             for (j, &y) in ys.iter().enumerate() {
                 let ky = k_wave * y;
                 let row_off = j * nz;
                 for (k, &z) in zs.iter().enumerate() {
-                    if is_shell_void || in_slab[row_off + k] {
-                        slab[row_off + k] =
-                            params.tpms_type.eval(kx, ky, k_wave * z) + params.bias;
+                    let idx = row_off + k;
+                    if is_shell_void || in_slab[idx] {
+                        slab[idx] = if let Some(us) = u_slab {
+                            let u = us[idx];
+                            let bias = params
+                                .grading
+                                .bias_end
+                                .map_or(params.bias, |b_end| lerp(params.bias, b_end, u));
+                            eval_tpms_with_grading(
+                                params.tpms_type,
+                                x,
+                                y,
+                                z,
+                                u,
+                                params.cell_size,
+                                params.grading.cell_size_end,
+                                params.grading.mode,
+                                min_b,
+                                extent,
+                                center,
+                            ) + bias
+                        } else {
+                            params.tpms_type.eval(kx, ky, k_wave * z) + params.bias
+                        };
                     }
                 }
             }
@@ -352,21 +424,66 @@ pub fn convert_stl(
         .map(|pct| (pct / 100.0).clamp(0.01, 0.99));
 
     let t_norm = params.tpms_type.thickness_multiplier() / 4.80;
-    let t = if let (Some(qv), false) = (q, params.is_skeletal) {
-        bvh::compute_abs_quantile(&scalar_val, &inside_3d, qv)
-    } else {
-        (params.tpms_type.thickness_multiplier() * params.wall_thickness
-            / params.cell_size.max(0.001))
-        .clamp(0.05, 1.5 * t_norm)
+    let has_graded_thresh = grading_active
+        && (params.grading.wall_thickness_end.is_some() || params.grading.cell_size_end.is_some());
+
+    let sheet_t_at = |u: f64| -> f64 {
+        let w = params
+            .grading
+            .wall_thickness_end
+            .map_or(params.wall_thickness, |w_end| {
+                lerp(params.wall_thickness, w_end, u)
+            });
+        let c = params
+            .grading
+            .cell_size_end
+            .map_or(params.cell_size, |c_end| lerp(params.cell_size, c_end, u));
+        (params.tpms_type.thickness_multiplier() * w / c.max(0.001)).clamp(0.05, 1.5 * t_norm)
     };
 
-    let skeletal_thresh = if params.is_skeletal {
-        let r = params.wall_thickness / params.cell_size.max(0.001);
+    let skel_t_at = |u: f64| -> f64 {
+        let w = params
+            .grading
+            .wall_thickness_end
+            .map_or(params.wall_thickness, |w_end| {
+                lerp(params.wall_thickness, w_end, u)
+            });
+        let c = params
+            .grading
+            .cell_size_end
+            .map_or(params.cell_size, |c_end| lerp(params.cell_size, c_end, u));
+        let r = w / c.max(0.001);
         let scale_strut = 3.0 * t_norm;
+        (scale_strut * (r - 0.2)).clamp(-1.1 * t_norm, 1.1 * t_norm)
+    };
+
+    let t_field: Option<Vec<f64>> = if has_graded_thresh && !params.is_skeletal {
+        u_field
+            .as_ref()
+            .map(|uf| uf.par_iter().map(|&u| sheet_t_at(u)).collect())
+    } else {
+        None
+    };
+
+    let t_scalar = if let (Some(qv), false) = (q, params.is_skeletal) {
+        bvh::compute_abs_quantile(&scalar_val, &inside_3d, qv)
+    } else {
+        sheet_t_at(0.0)
+    };
+
+    let skeletal_field: Option<Vec<f64>> = if has_graded_thresh && params.is_skeletal {
+        u_field
+            .as_ref()
+            .map(|uf| uf.par_iter().map(|&u| skel_t_at(u)).collect())
+    } else {
+        None
+    };
+
+    let skeletal_scalar = if params.is_skeletal {
         if let Some(qv) = q {
             bvh::compute_quantile(&scalar_val, &inside_3d, qv)
         } else {
-            (scale_strut * (r - 0.2)).clamp(-1.1 * t_norm, 1.1 * t_norm)
+            skel_t_at(0.0)
         }
     } else {
         0.0
@@ -376,15 +493,27 @@ pub fn convert_stl(
         if !params.include_cavities || params.is_skeletal {
             return (None, None);
         }
-        let field_a: Vec<f64> = scalar_val
-            .par_iter()
-            .zip(mask.par_iter())
-            .map(|(&s, &m)| if m { t - s } else { 1.0 })
+        let field_a: Vec<f64> = (0..total)
+            .into_par_iter()
+            .map(|idx| {
+                if mask[idx] {
+                    let t_val = t_field.as_ref().map_or(t_scalar, |tf| tf[idx]);
+                    t_val - scalar_val[idx]
+                } else {
+                    1.0
+                }
+            })
             .collect();
-        let field_b: Vec<f64> = scalar_val
-            .par_iter()
-            .zip(mask.par_iter())
-            .map(|(&s, &m)| if m { s + t } else { 1.0 })
+        let field_b: Vec<f64> = (0..total)
+            .into_par_iter()
+            .map(|idx| {
+                if mask[idx] {
+                    let t_val = t_field.as_ref().map_or(t_scalar, |tf| tf[idx]);
+                    scalar_val[idx] + t_val
+                } else {
+                    1.0
+                }
+            })
             .collect();
         let mut cav_a = extract_isosurface_cartesian(&xs, &ys, &zs, &field_a);
         manifold::ensure_positive_volume(&mut cav_a);
@@ -394,31 +523,33 @@ pub fn convert_stl(
     };
 
     if is_shell_void {
-        progress(65, "Computing shell distance transform...");
-        let dx = grid_extent[0] / ((nx - 1).max(1) as f64);
-        let dy = grid_extent[1] / ((ny - 1).max(1) as f64);
-        let dz = grid_extent[2] / ((nz - 1).max(1) as f64);
-
-        let dist_inside = edt::edt_3d(&inside_3d, nx, ny, nz, dx, dy, dz);
+        progress(65, "Building shell void field...");
+        let dist_in = dist_inside
+            .as_ref()
+            .expect("dist_inside must be computed when preserve_shell=true");
         let outside_3d: Vec<bool> = inside_3d.par_iter().map(|&b| !b).collect();
         let dist_outside = edt::edt_3d(&outside_3d, nx, ny, nz, dx, dy, dz);
 
-        let inner_mask: Vec<bool> = dist_inside
+        let inner_mask: Vec<bool> = dist_in
             .par_iter()
             .map(|&d| d > params.shell_thickness)
             .collect();
-        let field_void: Vec<f64> = dist_inside
-            .par_iter()
-            .zip(dist_outside.par_iter())
-            .zip(scalar_val.par_iter())
-            .map(|((&d_in, &d_out), &s)| {
+        let field_void: Vec<f64> = (0..total)
+            .into_par_iter()
+            .map(|idx| {
+                let d_in = dist_in[idx];
                 if d_in <= 0.0 {
-                    params.shell_thickness + d_out
+                    params.shell_thickness + dist_outside[idx]
                 } else {
+                    let s = scalar_val[idx];
                     let vs = if params.is_skeletal {
-                        skeletal_thresh - s
+                        let sk = skeletal_field
+                            .as_ref()
+                            .map_or(skeletal_scalar, |sf| sf[idx]);
+                        sk - s
                     } else {
-                        t - s.abs()
+                        let t_val = t_field.as_ref().map_or(t_scalar, |tf| tf[idx]);
+                        t_val - s.abs()
                     };
                     (params.shell_thickness - d_in).max(vs)
                 }
@@ -454,16 +585,19 @@ pub fn convert_stl(
     }
 
     progress(75, "Extracting gyroid isosurface contour...");
-    let field: Vec<f64> = scalar_val
-        .par_iter()
-        .zip(inside_3d.par_iter())
-        .map(|(&s, &is_in)| {
-            if !is_in {
+    let field: Vec<f64> = (0..total)
+        .into_par_iter()
+        .map(|idx| {
+            if !inside_3d[idx] {
                 1.0
             } else if params.is_skeletal {
-                s - skeletal_thresh
+                let sk = skeletal_field
+                    .as_ref()
+                    .map_or(skeletal_scalar, |sf| sf[idx]);
+                scalar_val[idx] - sk
             } else {
-                s.abs() - t
+                let t_val = t_field.as_ref().map_or(t_scalar, |tf| tf[idx]);
+                scalar_val[idx].abs() - t_val
             }
         })
         .collect();
@@ -572,6 +706,7 @@ mod tests {
             is_skeletal: false,
             infill_percent: None,
             include_cavities: true,
+            grading: GradingParams::default(),
         };
         let out = convert_stl(&cube.vertices, &cube.faces, &params, |_, _| {}).unwrap();
         assert!(!out.is_shell_void);
@@ -587,5 +722,97 @@ mod tests {
         let tri = provider.generate_infill(&cube, &inf_params).unwrap();
         assert!(!tri.vertices.is_empty());
         assert!(!tri.faces.is_empty());
+    }
+
+    #[test]
+    fn test_shell_to_core_wall_grading() {
+        let cube = box_trimesh(6.0);
+        let base_params = StlParams {
+            tpms_type: TpmsType::Gyroid,
+            resolution: 32,
+            cell_size: 4.0,
+            wall_thickness: 1.0,
+            bias: 0.0,
+            flat_cap: false,
+            preserve_shell: false,
+            shell_thickness: 1.0,
+            is_skeletal: false,
+            infill_percent: None,
+            include_cavities: true,
+            grading: GradingParams {
+                mode: GradingMode::ShellToCore,
+                wall_thickness_end: Some(0.3),
+                bias_end: None,
+                cell_size_end: None,
+                transition_depth: Some(4.0),
+            },
+        };
+        let out = convert_stl(&cube.vertices, &cube.faces, &base_params, |_, _| {}).unwrap();
+        let vol = manifold::signed_volume(&out.mesh);
+        assert!(out.mesh.n_cells() > 12);
+        assert!(vol > 0.0 && vol < 12.0 * 12.0 * 12.0);
+        assert!(out.cavity_a.as_ref().unwrap().n_cells() > 0);
+        assert!(out.cavity_b.as_ref().unwrap().n_cells() > 0);
+
+        // Compatible with preserve_shell and skeletal modes
+        let shell_params = StlParams {
+            preserve_shell: true,
+            include_cavities: false,
+            ..base_params.clone()
+        };
+        let out_shell =
+            convert_stl(&cube.vertices, &cube.faces, &shell_params, |_, _| {}).unwrap();
+        assert!(manifold::signed_volume(&out_shell.mesh) > 0.0);
+
+        let skel_params = StlParams {
+            is_skeletal: true,
+            include_cavities: false,
+            ..base_params
+        };
+        let out_skel =
+            convert_stl(&cube.vertices, &cube.faces, &skel_params, |_, _| {}).unwrap();
+        assert!(manifold::signed_volume(&out_skel.mesh) > 0.0);
+    }
+
+    #[test]
+    fn test_axial_and_radial_grading() {
+        let cube = box_trimesh(6.0);
+        let axial_params = StlParams {
+            tpms_type: TpmsType::Diamond,
+            resolution: 28,
+            cell_size: 4.0,
+            wall_thickness: 0.9,
+            bias: -0.2,
+            flat_cap: false,
+            preserve_shell: false,
+            shell_thickness: 1.0,
+            is_skeletal: false,
+            infill_percent: None,
+            include_cavities: false,
+            grading: GradingParams {
+                mode: GradingMode::AxialZ,
+                wall_thickness_end: Some(0.4),
+                bias_end: Some(0.3),
+                cell_size_end: Some(6.0),
+                transition_depth: None,
+            },
+        };
+        let out_axial =
+            convert_stl(&cube.vertices, &cube.faces, &axial_params, |_, _| {}).unwrap();
+        assert!(manifold::signed_volume(&out_axial.mesh) > 0.0);
+
+        let radial_params = StlParams {
+            grading: GradingParams {
+                mode: GradingMode::Radial,
+                wall_thickness_end: Some(0.4),
+                bias_end: None,
+                cell_size_end: None,
+                transition_depth: None,
+            },
+            ..axial_params
+        };
+        let out_radial =
+            convert_stl(&cube.vertices, &cube.faces, &radial_params, |_, _| {}).unwrap();
+        assert!(manifold::signed_volume(&out_radial.mesh) > 0.0);
     }
 }

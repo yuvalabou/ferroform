@@ -9,8 +9,10 @@ import os
 import sys
 import time
 
+import numpy as np
 import qdarkstyle
 from PyQt5.QtCore import QEvent, Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QColor, QLinearGradient, QPainter, QPen
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -64,6 +66,79 @@ class GeneratorWorker(QThread):
             self.error.emit(str(e))
 
 
+class GradingPreviewBar(QWidget):
+    """Lightweight 1D visual preview of Start -> End functional grading."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(26)
+        self.active = False
+        self.start_wall = 0.8
+        self.end_wall = 0.8
+        self.start_cell = 5.0
+        self.end_cell = 5.0
+        self.start_label = "Start"
+        self.end_label = "End"
+
+    def set_state(
+        self,
+        active: bool,
+        start_wall: float,
+        end_wall: float,
+        start_cell: float,
+        end_cell: float,
+        start_label: str = "Start",
+        end_label: str = "End",
+    ):
+        self.active = active
+        self.start_wall = max(0.05, start_wall)
+        self.end_wall = max(0.05, end_wall)
+        self.start_cell = max(0.5, start_cell)
+        self.end_cell = max(0.5, end_cell)
+        self.start_label = start_label
+        self.end_label = end_label
+        self.update()
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect().adjusted(1, 1, -1, -1)
+
+        if not self.active:
+            painter.setBrush(QColor("#2c3e50"))
+            painter.setPen(QColor("#4a607a"))
+            painter.drawRoundedRect(rect, 4, 4)
+            painter.setPen(QColor("#95a5a6"))
+            painter.drawText(rect, Qt.AlignCenter, "Uniform (no spatial grading)")
+            return
+
+        grad = QLinearGradient(rect.left(), 0, rect.right(), 0)
+        grad.setColorAt(0.0, QColor(52, 152, 219, 130))
+        grad.setColorAt(1.0, QColor(230, 126, 34, 130))
+        painter.setBrush(grad)
+        painter.setPen(QColor("#5d738a"))
+        painter.drawRoundedRect(rect, 4, 4)
+
+        # Draw sample lattice ticks whose spacing and thickness morph from Start -> End
+        max_w = max(self.start_wall, self.end_wall, 0.1)
+        x = float(rect.left() + 8)
+        right = float(rect.right() - 8)
+        span = max(1.0, right - x)
+        while x <= right:
+            u = (x - rect.left() - 8) / span
+            w_u = self.start_wall + (self.end_wall - self.start_wall) * u
+            c_u = self.start_cell + (self.end_cell - self.start_cell) * u
+            pen_w = max(1.0, min(5.0, 1.0 + 3.5 * (w_u / max_w)))
+            painter.setPen(QPen(QColor(236, 240, 241, 180), pen_w))
+            painter.drawLine(int(x), rect.top() + 4, int(x), rect.bottom() - 4)
+            step = max(5.0, min(22.0, 9.0 * (c_u / max(0.5, min(self.start_cell, self.end_cell)))))
+            x += step
+
+        painter.setPen(QColor("#ecf0f1"))
+        painter.drawText(rect.adjusted(6, 0, -6, 0), Qt.AlignVCenter | Qt.AlignLeft, self.start_label)
+        painter.drawText(rect.adjusted(6, 0, -6, 0), Qt.AlignVCenter | Qt.AlignRight, self.end_label)
+
+
 class GyroidGeneratorGUI(QMainWindow):
     """Modern GUI for PyRoid with Parametric and STL Conversion tabs."""
 
@@ -74,6 +149,8 @@ class GyroidGeneratorGUI(QMainWindow):
         self._gen_start_time = 0.0
         self._clip_plane = vtkPlane()
         self._mesh_actors = []
+        self._preview_stl_mesh = None
+        self._updating_grade_ui = False
 
         self.init_ui()
         self.apply_preset(self.current_preset)
@@ -310,6 +387,139 @@ class GyroidGeneratorGUI(QMainWindow):
 
         stl_tab_layout.addWidget(stl_params_box)
 
+        # Functional Grading Group
+        grade_box = QGroupBox("Functional Grading (Optional)")
+        grade_layout = QVBoxLayout(grade_box)
+
+        preset_row = QHBoxLayout()
+        preset_lbl = QLabel("Quick Preset:")
+        preset_lbl.setToolTip("1-click grading recipes that auto-fill direction and end values")
+        preset_row.addWidget(preset_lbl)
+        self.stl_grade_preset_combo = QComboBox()
+        self.stl_grade_preset_combo.addItem("None (Uniform)", "none")
+        self.stl_grade_preset_combo.addItem("Strong Shell → Light Core", "strong_shell_light_core")
+        self.stl_grade_preset_combo.addItem("Light Shell → Strong Core", "light_shell_strong_core")
+        self.stl_grade_preset_combo.addItem("Heavy Bottom → Light Top (Z)", "heavy_bottom_light_top")
+        self.stl_grade_preset_combo.addItem("Stiff Center → Soft Edge (XY)", "stiff_center_soft_edge")
+        self.stl_grade_preset_combo.addItem("Custom...", "custom")
+        self.stl_grade_preset_combo.currentIndexChanged.connect(self.on_grade_preset_changed)
+        preset_row.addWidget(self.stl_grade_preset_combo)
+        grade_layout.addLayout(preset_row)
+
+        grade_mode_row = QHBoxLayout()
+        grade_mode_lbl = QLabel("Direction:")
+        grade_mode_lbl.setToolTip("Where Start (0%) and End (100%) are located in 3D space")
+        grade_mode_row.addWidget(grade_mode_lbl)
+        self.stl_grade_combo = QComboBox()
+        self.stl_grade_combo.addItem("None (Uniform)", "none")
+        self.stl_grade_combo.addItem("Outside Surface → Inside Core (EDT)", "shell_to_core")
+        self.stl_grade_combo.addItem("Left → Right (X)", "axial_x")
+        self.stl_grade_combo.addItem("Front → Back (Y)", "axial_y")
+        self.stl_grade_combo.addItem("Bottom → Top (Z)", "axial_z")
+        self.stl_grade_combo.addItem("Center → Outer Edge (XY)", "radial")
+        self.stl_grade_combo.currentIndexChanged.connect(self.on_grade_mode_changed)
+        grade_mode_row.addWidget(self.stl_grade_combo)
+        grade_layout.addLayout(grade_mode_row)
+
+        def _make_grade_row(
+            label_text: str,
+            start_text: str,
+            placeholder: str,
+            tooltip: str,
+            with_start: bool = True,
+        ):
+            row = QHBoxLayout()
+            lbl = QLabel(label_text)
+            lbl.setToolTip(tooltip)
+            lbl.setEnabled(False)
+            row.addWidget(lbl)
+            start_lbl = None
+            if with_start:
+                start_lbl = QLabel(start_text)
+                start_lbl.setStyleSheet("color: #95a5a6; font-size: 11px;")
+                start_lbl.setEnabled(False)
+                row.addWidget(start_lbl)
+            edit = QLineEdit()
+            edit.setPlaceholderText(placeholder)
+            edit.setToolTip(tooltip)
+            edit.setEnabled(False)
+            row.addWidget(edit)
+            grade_layout.addLayout(row)
+            return lbl, start_lbl, edit
+
+        self.stl_grade_infill_label, self.stl_grade_infill_start_lbl, self.stl_grade_infill_edit = (
+            _make_grade_row(
+                "End Infill (%):",
+                "30% →",
+                "Same as Start",
+                "Optional shortcut: type target End infill % to auto-compute End Wall Thickness",
+            )
+        )
+        self.stl_grade_wall_label, self.stl_grade_wall_start_lbl, self.stl_grade_wall_edit = (
+            _make_grade_row(
+                "Wall (mm):",
+                "0.80 →",
+                "Same as Start",
+                "Target wall thickness (mm) at grading End",
+            )
+        )
+        self.stl_grade_cell_label, self.stl_grade_cell_start_lbl, self.stl_grade_cell_edit = (
+            _make_grade_row(
+                "Cell Size (mm):",
+                "5.00 →",
+                "Same as Start",
+                "Target TPMS unit cell size (mm) at grading End",
+            )
+        )
+        self.stl_grade_bias_label, self.stl_grade_bias_start_lbl, self.stl_grade_bias_edit = (
+            _make_grade_row(
+                "Bias (-1.4..1.4):",
+                "0.00 →",
+                "Same as Start",
+                "Target cavity A/B bias at grading End",
+            )
+        )
+        self.stl_grade_depth_label, _, self.stl_grade_depth_edit = _make_grade_row(
+            "Transition Depth (mm):",
+            "",
+            "Auto (to center)",
+            "Distance from outer surface to core for Surface → Core grading (blank = auto)",
+            with_start=False,
+        )
+
+        self.stl_grade_preview_bar = GradingPreviewBar()
+        grade_layout.addWidget(self.stl_grade_preview_bar)
+
+        self.stl_grade_summary_label = QLabel(
+            "Uniform lattice — same wall & cell size everywhere."
+        )
+        self.stl_grade_summary_label.setWordWrap(True)
+        self.stl_grade_summary_label.setStyleSheet("color: #95a5a6; font-size: 11px;")
+        grade_layout.addWidget(self.stl_grade_summary_label)
+
+        # Wire live feedback on every relevant parameter change
+        self.stl_grade_infill_edit.textEdited.connect(self.on_grade_infill_edited)
+        for edit in (
+            self.stl_grade_wall_edit,
+            self.stl_grade_cell_edit,
+            self.stl_grade_bias_edit,
+            self.stl_grade_depth_edit,
+        ):
+            edit.textEdited.connect(self._on_grade_manual_edit)
+            edit.textChanged.connect(self._update_grading_feedback)
+        self.stl_grade_depth_edit.textChanged.connect(self._refresh_stl_preview)
+
+        for start_edit in (
+            self.stl_infill_edit,
+            self.stl_wall_edit,
+            self.stl_cell_edit,
+            self.stl_bias_edit,
+        ):
+            start_edit.textChanged.connect(self._update_grading_feedback)
+        self.stl_tpms_combo.currentIndexChanged.connect(self._update_grading_feedback)
+
+        stl_tab_layout.addWidget(grade_box)
+
         self.convert_stl_btn = QPushButton("Convert STL Volume to Gyroid")
         self.convert_stl_btn.setStyleSheet("font-weight: bold; padding: 6px;")
         self.convert_stl_btn.clicked.connect(self.on_convert_stl_clicked)
@@ -341,6 +551,17 @@ class GyroidGeneratorGUI(QMainWindow):
         )
         self.show_wall_check.toggled.connect(self.on_view_mode_changed)
         view_layout.addWidget(self.show_wall_check)
+
+        color_row = QHBoxLayout()
+        color_lbl = QLabel("Color By:")
+        color_lbl.setToolTip("Choose whether solid wall colors show Z height or local infill density (%)")
+        color_row.addWidget(color_lbl)
+        self.color_mode_combo = QComboBox()
+        self.color_mode_combo.addItem("Height (Z)", "z")
+        self.color_mode_combo.addItem("Infill Density (%)", "density")
+        self.color_mode_combo.currentIndexChanged.connect(self.on_view_mode_changed)
+        color_row.addWidget(self.color_mode_combo)
+        view_layout.addLayout(color_row)
 
         cav_row = QHBoxLayout()
         self.show_cav_a_check = QCheckBox("Cavity A (Red)")
@@ -579,13 +800,11 @@ class GyroidGeneratorGUI(QMainWindow):
 
             mesh = pv.read(file_path)
             if mesh is not None and getattr(mesh, "n_points", 0) > 0:
-                self.plotter.clear()
-                self.plotter.add_mesh(mesh, color="#5dade2", show_edges=True)
-                self.plotter.add_bounding_box()
-                self.plotter.show_axes()
-                self.plotter.reset_camera()
+                self._preview_stl_mesh = mesh
                 self.generator = None
                 self.stats_box.setVisible(False)
+                self._refresh_stl_preview(reset_camera=True)
+                self._update_grading_feedback()
         except Exception:
             pass
 
@@ -670,6 +889,18 @@ class GyroidGeneratorGUI(QMainWindow):
             preserve_shell = self.stl_shell_check.isChecked()
             shell_thick = float(self.stl_shell_edit.text()) if preserve_shell else 1.0
 
+            def _opt_float(edit: QLineEdit) -> float | None:
+                txt = edit.text().strip()
+                return float(txt) if txt else None
+
+            grade_mode = self.stl_grade_combo.currentData() or "none"
+            grade_wall_end = _opt_float(self.stl_grade_wall_edit) if grade_mode != "none" else None
+            grade_bias_end = _opt_float(self.stl_grade_bias_edit) if grade_mode != "none" else None
+            grade_cell_end = _opt_float(self.stl_grade_cell_edit) if grade_mode != "none" else None
+            grade_depth = (
+                _opt_float(self.stl_grade_depth_edit) if grade_mode == "shell_to_core" else None
+            )
+
             stl_params = STLConversionParams(
                 stl_path=stl_path,
                 tpms_type=tpms_type,
@@ -682,6 +913,11 @@ class GyroidGeneratorGUI(QMainWindow):
                 shell_thickness=shell_thick,
                 is_skeletal=is_skeletal,
                 infill_percent=infill_pct,
+                grade_mode=grade_mode,
+                grade_wall_end=grade_wall_end,
+                grade_bias_end=grade_bias_end,
+                grade_cell_end=grade_cell_end,
+                grade_depth=grade_depth,
             )
 
             self._gen_start_time = time.perf_counter()
@@ -708,21 +944,296 @@ class GyroidGeneratorGUI(QMainWindow):
         self.stl_cell_edit.setEnabled(checked)
         self.stl_infill_label.setEnabled(not checked)
         self.stl_infill_edit.setEnabled(not checked)
+        self._update_grading_feedback()
 
     def on_shell_check_toggled(self, checked: bool):
         self.stl_shell_label.setEnabled(checked)
         self.stl_shell_edit.setEnabled(checked)
 
+    def _safe_float(self, text: str, default: float) -> float:
+        try:
+            return float(text.strip())
+        except (ValueError, AttributeError):
+            return default
+
+    def _current_stl_start_values(self) -> tuple[float, float, float, float, bool, str]:
+        """Return (start_wall, start_cell, start_bias, start_infill, is_skeletal, tpms_type)."""
+        wall = max(0.05, self._safe_float(self.stl_wall_edit.text(), 0.8))
+        is_skeletal = self.stl_skeletal_check.isChecked()
+        tpms_type = (
+            self.stl_tpms_combo.currentData() if hasattr(self, "stl_tpms_combo") else "gyroid"
+        )
+        if self.stl_cell_check.isChecked():
+            cell = max(0.1, self._safe_float(self.stl_cell_edit.text(), 5.0))
+            infill = STLConversionParams.estimate_infill(
+                cell, wall, is_skeletal, tpms_type=tpms_type
+            )
+        else:
+            infill = min(99.0, max(1.0, self._safe_float(self.stl_infill_edit.text(), 30.0)))
+            cell = STLConversionParams.estimate_cell_size(
+                infill, wall, is_skeletal, tpms_type=tpms_type
+            )
+        bias = 0.0 if is_skeletal else self._safe_float(self.stl_bias_edit.text(), 0.0)
+        return wall, cell, bias, infill, is_skeletal, tpms_type
+
+    def on_grade_preset_changed(self, _index: int = 0):
+        if self._updating_grade_ui:
+            return
+        preset = self.stl_grade_preset_combo.currentData() or "none"
+        if preset == "custom":
+            return
+
+        start_wall, _cell, _bias, _infill, _skel, _tpms = self._current_stl_start_values()
+        self._updating_grade_ui = True
+        try:
+            if preset == "none":
+                idx = self.stl_grade_combo.findData("none")
+                if idx >= 0:
+                    self.stl_grade_combo.setCurrentIndex(idx)
+                for edit in (
+                    self.stl_grade_infill_edit,
+                    self.stl_grade_wall_edit,
+                    self.stl_grade_cell_edit,
+                    self.stl_grade_bias_edit,
+                    self.stl_grade_depth_edit,
+                ):
+                    edit.clear()
+            else:
+                mode_map = {
+                    "strong_shell_light_core": ("shell_to_core", 0.5),
+                    "light_shell_strong_core": ("shell_to_core", 1.8),
+                    "heavy_bottom_light_top": ("axial_z", 0.5),
+                    "stiff_center_soft_edge": ("radial", 0.5),
+                }
+                mode, wall_mult = mode_map[preset]
+                idx = self.stl_grade_combo.findData(mode)
+                if idx >= 0:
+                    self.stl_grade_combo.setCurrentIndex(idx)
+                self.stl_grade_wall_edit.setText(f"{start_wall * wall_mult:.2f}")
+                self.stl_grade_cell_edit.clear()
+                self.stl_grade_bias_edit.clear()
+                self.stl_grade_infill_edit.clear()
+        finally:
+            self._updating_grade_ui = False
+
+        self.on_grade_mode_changed()
+
+    def _on_grade_manual_edit(self):
+        if self._updating_grade_ui:
+            return
+        self._updating_grade_ui = True
+        try:
+            idx = self.stl_grade_preset_combo.findData("custom")
+            if idx >= 0:
+                self.stl_grade_preset_combo.setCurrentIndex(idx)
+        finally:
+            self._updating_grade_ui = False
+
+    def on_grade_infill_edited(self, text: str):
+        if self._updating_grade_ui:
+            return
+        self._on_grade_manual_edit()
+        txt = text.strip()
+        if not txt:
+            return
+        try:
+            end_infill = float(txt)
+        except ValueError:
+            return
+        if not (1.0 <= end_infill <= 99.0):
+            return
+        _sw, start_cell, _sb, _si, is_skeletal, tpms_type = self._current_stl_start_values()
+        end_cell_txt = self.stl_grade_cell_edit.text().strip()
+        target_cell = self._safe_float(end_cell_txt, start_cell) if end_cell_txt else start_cell
+        if is_skeletal:
+            ratio = max(0.05, 0.2 + (end_infill - 50.0) / 95.5)
+            end_wall = target_cell * ratio
+        else:
+            factor = get_tpms_kernel(tpms_type).surface_factor
+            end_wall = (end_infill * target_cell) / max(factor, 1e-6)
+        self._updating_grade_ui = True
+        try:
+            self.stl_grade_wall_edit.setText(f"{max(0.05, end_wall):.2f}")
+        finally:
+            self._updating_grade_ui = False
+        self._update_grading_feedback()
+
+    def on_grade_mode_changed(self, _index: int = 0):
+        mode = self.stl_grade_combo.currentData() or "none"
+        active = mode != "none"
+        skeletal = self.stl_skeletal_check.isChecked()
+
+        if not self._updating_grade_ui and mode == "none":
+            self._updating_grade_ui = True
+            try:
+                idx = self.stl_grade_preset_combo.findData("none")
+                if idx >= 0:
+                    self.stl_grade_preset_combo.setCurrentIndex(idx)
+            finally:
+                self._updating_grade_ui = False
+
+        for widgets in (
+            (self.stl_grade_infill_label, self.stl_grade_infill_start_lbl, self.stl_grade_infill_edit),
+            (self.stl_grade_wall_label, self.stl_grade_wall_start_lbl, self.stl_grade_wall_edit),
+            (self.stl_grade_cell_label, self.stl_grade_cell_start_lbl, self.stl_grade_cell_edit),
+        ):
+            for w in widgets:
+                if w is not None:
+                    w.setEnabled(active)
+
+        for w in (self.stl_grade_bias_label, self.stl_grade_bias_start_lbl, self.stl_grade_bias_edit):
+            if w is not None:
+                w.setEnabled(active and not skeletal)
+
+        is_edt = mode == "shell_to_core"
+        self.stl_grade_depth_label.setEnabled(is_edt)
+        self.stl_grade_depth_edit.setEnabled(is_edt)
+
+        self._update_grading_feedback()
+        self._refresh_stl_preview(reset_camera=False)
+
+    def _update_grading_feedback(self):
+        start_wall, start_cell, start_bias, start_infill, is_skeletal, tpms_type = (
+            self._current_stl_start_values()
+        )
+        self.stl_grade_infill_start_lbl.setText(f"{start_infill:.0f}% →")
+        self.stl_grade_wall_start_lbl.setText(f"{start_wall:.2f} →")
+        self.stl_grade_cell_start_lbl.setText(f"{start_cell:.2f} →")
+        self.stl_grade_bias_start_lbl.setText(f"{start_bias:.2f} →")
+
+        mode = self.stl_grade_combo.currentData() or "none"
+        if mode == "none":
+            self.stl_grade_preview_bar.set_state(
+                False, start_wall, start_wall, start_cell, start_cell
+            )
+            self.stl_grade_summary_label.setStyleSheet("color: #95a5a6; font-size: 11px;")
+            self.stl_grade_summary_label.setText(
+                f"Uniform lattice — ~{start_infill:.0f}% infill ({start_wall:.2f} mm wall, {start_cell:.2f} mm cell) everywhere."
+            )
+            return
+
+        def _opt(edit: QLineEdit) -> float | None:
+            txt = edit.text().strip()
+            if not txt:
+                return None
+            try:
+                return float(txt)
+            except ValueError:
+                return None
+
+        end_wall_opt = _opt(self.stl_grade_wall_edit)
+        end_cell_opt = _opt(self.stl_grade_cell_edit)
+        end_bias_opt = None if is_skeletal else _opt(self.stl_grade_bias_edit)
+        depth_opt = _opt(self.stl_grade_depth_edit) if mode == "shell_to_core" else None
+
+        end_wall = end_wall_opt if end_wall_opt is not None else start_wall
+        end_cell = end_cell_opt if end_cell_opt is not None else start_cell
+        end_infill = STLConversionParams.estimate_infill(
+            end_cell, end_wall, is_skeletal, tpms_type=tpms_type
+        )
+
+        endpoints = {
+            "shell_to_core": ("Outer Surface", "Core"),
+            "axial_x": ("Left (X min)", "Right (X max)"),
+            "axial_y": ("Front (Y min)", "Back (Y max)"),
+            "axial_z": ("Bottom (Z min)", "Top (Z max)"),
+            "radial": ("Center (XY)", "Outer Edge"),
+        }
+        start_name, end_name = endpoints.get(mode, ("Start", "End"))
+        has_change = any(v is not None for v in (end_wall_opt, end_cell_opt, end_bias_opt))
+
+        self.stl_grade_preview_bar.set_state(
+            has_change, start_wall, end_wall, start_cell, end_cell, start_name, end_name
+        )
+
+        if not has_change:
+            self.stl_grade_summary_label.setStyleSheet("color: #f39c12; font-size: 11px;")
+            self.stl_grade_summary_label.setText(
+                "Pick a Quick Preset or enter at least one End value to activate grading."
+            )
+            return
+
+        depth_note = ""
+        if mode == "shell_to_core":
+            if depth_opt is not None and depth_opt > 0:
+                depth_note = f" over {depth_opt:.1f} mm depth"
+            elif self._preview_stl_mesh is not None:
+                b = self._preview_stl_mesh.bounds
+                est_depth = 0.5 * min(b[1] - b[0], b[3] - b[2], b[5] - b[4])
+                depth_note = f" (auto depth ~{est_depth:.1f} mm)"
+            else:
+                depth_note = " (auto depth)"
+
+        self.stl_grade_summary_label.setStyleSheet("color: #d0d7de; font-size: 11px;")
+        self.stl_grade_summary_label.setText(
+            f"{start_name}: ~{start_infill:.0f}% ({start_wall:.2f} mm wall, {start_cell:.2f} mm cell)  →  "
+            f"{end_name}{depth_note}: ~{end_infill:.0f}% ({end_wall:.2f} mm wall, {end_cell:.2f} mm cell)"
+        )
+
+    def _refresh_stl_preview(self, reset_camera: bool = False):
+        """Render the loaded input STL colored by the active grading profile (instant preview)."""
+        if self._preview_stl_mesh is None or self.generator is not None:
+            return
+        mesh = self._preview_stl_mesh
+        mode = self.stl_grade_combo.currentData() or "none"
+
+        self.plotter.clear()
+        if mode == "none":
+            self.plotter.add_mesh(mesh, color="#5dade2", show_edges=True)
+        else:
+            pts = np.asarray(mesh.points, dtype=np.float64)
+            b = mesh.bounds
+            ex = max(b[1] - b[0], 1e-6)
+            ey = max(b[3] - b[2], 1e-6)
+            ez = max(b[5] - b[4], 1e-6)
+
+            if mode == "axial_x":
+                u = np.clip((pts[:, 0] - b[0]) / ex, 0.0, 1.0)
+            elif mode == "axial_y":
+                u = np.clip((pts[:, 1] - b[2]) / ey, 0.0, 1.0)
+            elif mode == "axial_z":
+                u = np.clip((pts[:, 2] - b[4]) / ez, 0.0, 1.0)
+            elif mode == "radial":
+                cx = 0.5 * (b[0] + b[1])
+                cy = 0.5 * (b[2] + b[3])
+                max_r = max(0.5 * max(ex, ey), 1e-6)
+                u = np.clip(np.hypot(pts[:, 0] - cx, pts[:, 1] - cy) / max_r, 0.0, 1.0)
+            else:  # shell_to_core: outer surface is u=0 (Start)
+                u = np.zeros(len(pts), dtype=np.float64)
+
+            self.plotter.add_mesh(
+                mesh,
+                scalars=u,
+                cmap="coolwarm",
+                clim=[0.0, 1.0],
+                show_edges=True,
+                show_scalar_bar=True,
+                scalar_bar_args={"title": "Grading: Start (0) → End (1)"},
+            )
+
+        self.plotter.add_bounding_box()
+        self.plotter.show_axes()
+        if reset_camera:
+            self.plotter.reset_camera()
+        else:
+            self.plotter.render()
+
     def on_skeletal_toggled(self, _checked: bool = False):
         is_skeletal_stl = self.tabs.currentIndex() == 1 and self.stl_skeletal_check.isChecked()
-        self.stl_bias_label.setEnabled(not self.stl_skeletal_check.isChecked())
-        self.stl_bias_edit.setEnabled(not self.stl_skeletal_check.isChecked())
+        skeletal = self.stl_skeletal_check.isChecked()
+        self.stl_bias_label.setEnabled(not skeletal)
+        self.stl_bias_edit.setEnabled(not skeletal)
+        grade_active = (self.stl_grade_combo.currentData() or "none") != "none"
+        for w in (self.stl_grade_bias_label, self.stl_grade_bias_start_lbl, self.stl_grade_bias_edit):
+            if w is not None:
+                w.setEnabled(grade_active and not skeletal)
         self.show_cav_a_check.setEnabled(not is_skeletal_stl)
         self.show_cav_b_check.setEnabled(not is_skeletal_stl)
         if is_skeletal_stl:
             self.show_cav_a_check.setChecked(False)
             self.show_cav_b_check.setChecked(False)
             self.show_wall_check.setChecked(True)
+        self._update_grading_feedback()
 
     def on_view_mode_changed(self):
         if self.generator and self.generator.mesh:
@@ -782,6 +1293,82 @@ class GyroidGeneratorGUI(QMainWindow):
             if enabled:
                 mapper.AddClippingPlane(self._clip_plane)
 
+    def _compute_density_scalars(self, wall) -> np.ndarray:
+        """Compute per-vertex estimated infill density (%) for the generated mesh."""
+        pts = np.asarray(wall.points, dtype=np.float64)
+        n_pts = len(pts)
+        stl_params = getattr(self.generator, "last_stl_params", None) if self.generator else None
+
+        if stl_params is None:
+            # Parametric gyroid: uniform solid fraction from mesh stats if available
+            stats = self.generator.get_mesh_stats() if self.generator else {}
+            porosity = stats.get("porosity_pct")
+            val = max(0.0, min(100.0, 100.0 - float(porosity))) if porosity is not None else 50.0
+            return np.full(n_pts, val, dtype=np.float64)
+
+        mode = stl_params.grade_mode
+        if mode == "none":
+            val = STLConversionParams.estimate_infill(
+                stl_params.cell_size,
+                stl_params.wall_thickness,
+                stl_params.is_skeletal,
+                tpms_type=stl_params.tpms_type,
+            )
+            return np.full(n_pts, val, dtype=np.float64)
+
+        bounds = getattr(self.generator, "_input_bounds", None)
+        if bounds is not None:
+            min_b, max_b = bounds[0], bounds[1]
+        else:
+            b = wall.bounds
+            min_b = np.array([b[0], b[2], b[4]], dtype=np.float64)
+            max_b = np.array([b[1], b[3], b[5]], dtype=np.float64)
+        extent = np.maximum(max_b - min_b, 1e-6)
+
+        if mode == "axial_x":
+            u = np.clip((pts[:, 0] - min_b[0]) / extent[0], 0.0, 1.0)
+        elif mode == "axial_y":
+            u = np.clip((pts[:, 1] - min_b[1]) / extent[1], 0.0, 1.0)
+        elif mode == "axial_z":
+            u = np.clip((pts[:, 2] - min_b[2]) / extent[2], 0.0, 1.0)
+        elif mode == "radial":
+            cx = min_b[0] + 0.5 * extent[0]
+            cy = min_b[1] + 0.5 * extent[1]
+            max_r = max(0.5 * max(extent[0], extent[1]), 1e-6)
+            u = np.clip(np.hypot(pts[:, 0] - cx, pts[:, 1] - cy) / max_r, 0.0, 1.0)
+        elif mode == "shell_to_core":
+            surf_pts = getattr(self.generator, "_input_surface_points", None)
+            if surf_pts is not None and len(surf_pts) > 0:
+                from scipy.spatial import cKDTree
+
+                dists, _ = cKDTree(surf_pts).query(pts, workers=-1)
+                depth = (
+                    stl_params.grade_depth
+                    if (stl_params.grade_depth is not None and stl_params.grade_depth > 0)
+                    else max(float(dists.max()), 1e-6)
+                )
+                u = np.clip(dists / depth, 0.0, 1.0)
+            else:
+                u = np.zeros(n_pts, dtype=np.float64)
+        else:
+            u = np.zeros(n_pts, dtype=np.float64)
+
+        w_start = stl_params.wall_thickness
+        w_end = stl_params.grade_wall_end if stl_params.grade_wall_end is not None else w_start
+        c_start = stl_params.cell_size
+        c_end = stl_params.grade_cell_end if stl_params.grade_cell_end is not None else c_start
+
+        w_u = w_start + (w_end - w_start) * u
+        c_u = np.maximum(c_start + (c_end - c_start) * u, 1e-6)
+        ratio = w_u / c_u
+
+        if stl_params.is_skeletal:
+            density = np.clip(50.0 + 95.5 * (ratio - 0.2), 5.0, 95.0)
+        else:
+            factor = get_tpms_kernel(stl_params.tpms_type).surface_factor
+            density = np.clip(factor * ratio, 5.0, 95.0)
+        return density
+
     def render_current_mesh(self, reset_camera: bool = True, refresh_stats: bool = True):
         self._mesh_actors.clear()
         self.plotter.clear()
@@ -804,9 +1391,24 @@ class GyroidGeneratorGUI(QMainWindow):
             if show_cavs:
                 actor = self.plotter.add_mesh(wall, color="#cccccc", opacity=0.25)
             else:
-                actor = self.plotter.add_mesh(
-                    wall, scalars=wall.points[:, -1], show_scalar_bar=False
+                color_mode = (
+                    self.color_mode_combo.currentData()
+                    if hasattr(self, "color_mode_combo")
+                    else "z"
                 )
+                if color_mode == "density":
+                    scalars = self._compute_density_scalars(wall)
+                    actor = self.plotter.add_mesh(
+                        wall,
+                        scalars=scalars,
+                        cmap="coolwarm",
+                        show_scalar_bar=True,
+                        scalar_bar_args={"title": "Infill Density (%)"},
+                    )
+                else:
+                    actor = self.plotter.add_mesh(
+                        wall, scalars=wall.points[:, -1], show_scalar_bar=False
+                    )
             self._mesh_actors.append(actor)
 
         if self.show_cav_a_check.isChecked() and self.generator.cavity_a is not None:
@@ -840,6 +1442,25 @@ class GyroidGeneratorGUI(QMainWindow):
         self.generate_btn.setEnabled(True)
         self.convert_stl_btn.setEnabled(True)
         self.progressBar.setVisible(False)
+        stl_params = getattr(generator, "last_stl_params", None)
+        if (
+            stl_params is not None
+            and stl_params.grade_mode != "none"
+            and any(
+                v is not None
+                for v in (
+                    stl_params.grade_wall_end,
+                    stl_params.grade_cell_end,
+                    stl_params.grade_bias_end,
+                )
+            )
+            and hasattr(self, "color_mode_combo")
+        ):
+            idx = self.color_mode_combo.findData("density")
+            if idx >= 0:
+                self.color_mode_combo.blockSignals(True)
+                self.color_mode_combo.setCurrentIndex(idx)
+                self.color_mode_combo.blockSignals(False)
         self.render_current_mesh()
 
     def on_generation_error(self, error_msg):

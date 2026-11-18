@@ -152,3 +152,69 @@ def test_slice_inspector_and_manufacturability_stats(gui_window):
 
     gui_window.slice_enable_check.setChecked(False)
     assert gui_window._mesh_actors[0].mapper.GetNumberOfClippingPlanes() == 0
+
+
+def test_functional_grading_ui_controls(gui_window):
+    # Starts in Uniform (none) mode with grading inputs disabled
+    assert gui_window.stl_grade_combo.currentData() == "none"
+    assert not gui_window.stl_grade_wall_edit.isEnabled()
+    assert not gui_window.stl_grade_bias_edit.isEnabled()
+    assert not gui_window.stl_grade_cell_edit.isEnabled()
+    assert not gui_window.stl_grade_depth_edit.isEnabled()
+
+    # Switching to Shell-to-Core enables all grading inputs including transition depth
+    idx_edt = gui_window.stl_grade_combo.findData("shell_to_core")
+    gui_window.stl_grade_combo.setCurrentIndex(idx_edt)
+    assert gui_window.stl_grade_wall_edit.isEnabled()
+    assert gui_window.stl_grade_bias_edit.isEnabled()
+    assert gui_window.stl_grade_cell_edit.isEnabled()
+    assert gui_window.stl_grade_depth_edit.isEnabled()
+
+    # Switching to Axial Z keeps wall/bias/cell enabled, disables transition depth
+    idx_z = gui_window.stl_grade_combo.findData("axial_z")
+    gui_window.stl_grade_combo.setCurrentIndex(idx_z)
+    assert gui_window.stl_grade_wall_edit.isEnabled()
+    assert not gui_window.stl_grade_depth_edit.isEnabled()
+
+    # Quick preset auto-populates direction, end wall, and live summary
+    idx_preset = gui_window.stl_grade_preset_combo.findData("strong_shell_light_core")
+    gui_window.stl_grade_preset_combo.setCurrentIndex(idx_preset)
+    assert gui_window.stl_grade_combo.currentData() == "shell_to_core"
+    assert float(gui_window.stl_grade_wall_edit.text()) < float(gui_window.stl_wall_edit.text())
+    assert gui_window.stl_grade_preview_bar.active
+    assert "Outer Surface" in gui_window.stl_grade_summary_label.text()
+
+    # Typing End Infill % auto-computes End Wall Thickness
+    gui_window.stl_grade_infill_edit.setText("15")
+    gui_window.on_grade_infill_edited("15")
+    assert float(gui_window.stl_grade_wall_edit.text()) > 0.0
+
+    # Skeletal mode disables End Bias
+    gui_window.stl_skeletal_check.setChecked(True)
+    assert not gui_window.stl_grade_bias_edit.isEnabled()
+
+
+def test_color_by_infill_density(gui_window, tmp_path):
+    import trimesh
+
+    from pyroid.models import STLConversionParams
+
+    stl_path = str(tmp_path / "box.stl")
+    trimesh.creation.box(extents=[10.0, 10.0, 10.0]).export(stl_path)
+
+    gen = GyroidGenerator()
+    params = STLConversionParams(
+        stl_path=stl_path,
+        resolution=20,
+        cell_size=4.0,
+        wall_thickness=1.0,
+        grade_mode="axial_z",
+        grade_wall_end=0.4,
+    )
+    gen.convert_from_stl(params, include_cavities=False)
+    gui_window.on_generation_finished(gen)
+
+    assert gui_window.color_mode_combo.currentData() == "density"
+    scalars = gui_window._compute_density_scalars(gen.mesh)
+    assert len(scalars) == gen.mesh.n_points
+    assert scalars.max() > scalars.min()

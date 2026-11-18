@@ -129,6 +129,32 @@ class STLConversionParams:
         default=None,
         metadata={"help": "Target solid infill volume percentage (1 to 99)"},
     )
+    grade_mode: str = field(
+        default="none",
+        metadata={
+            "help": "Spatial grading profile: none, shell_to_core, axial_x, axial_y, axial_z, radial"
+        },
+    )
+    grade_wall_end: float | None = field(
+        default=None,
+        metadata={
+            "help": "Target wall thickness (mm) at grading end (core / max axis / outer radius)"
+        },
+    )
+    grade_bias_end: float | None = field(
+        default=None,
+        metadata={"help": "Target cavity bias (-1.4 to 1.4) at grading end"},
+    )
+    grade_cell_end: float | None = field(
+        default=None,
+        metadata={"help": "Target unit cell size (mm) at grading end"},
+    )
+    grade_depth: float | None = field(
+        default=None,
+        metadata={
+            "help": "Transition depth (mm) from outer surface for shell_to_core grading (None = auto)"
+        },
+    )
 
     @staticmethod
     def estimate_infill(
@@ -185,4 +211,18 @@ class STLConversionParams:
                 False,
                 "Shell thickness must be positive when shell preservation is enabled",
             )
+        valid_grade_modes = {"none", "shell_to_core", "axial_x", "axial_y", "axial_z", "radial"}
+        if self.grade_mode.strip().lower().replace("-", "_") not in valid_grade_modes:
+            return (
+                False,
+                f"Unknown grading mode: {self.grade_mode}. Supported: {sorted(valid_grade_modes)}",
+            )
+        if self.grade_wall_end is not None and self.grade_wall_end <= 0:
+            return False, "Graded end wall thickness must be positive"
+        if self.grade_bias_end is not None and not (-1.4 <= self.grade_bias_end <= 1.4):
+            return False, "Graded end bias must be between -1.4 and 1.4"
+        if self.grade_cell_end is not None and self.grade_cell_end <= 0:
+            return False, "Graded end cell size must be positive"
+        if self.grade_depth is not None and self.grade_depth < 0:
+            return False, "Grading transition depth must be non-negative"
         return True, ""

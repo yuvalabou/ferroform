@@ -117,3 +117,69 @@ def test_cli_tpms_options(monkeypatch, tmp_path):
     )
     assert main() == 0
     assert (tmp_path / "iwp_infill.stl").stat().st_size > 0
+
+
+def test_cli_graded_stl_conversion(tmp_path, monkeypatch):
+    import trimesh
+
+    in_path = str(tmp_path / "cube.stl")
+    out_stl = str(tmp_path / "graded_infill.stl")
+    cube = trimesh.creation.box(extents=[10.0, 10.0, 10.0])
+    cube.export(in_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pyroid-cli",
+            "-i",
+            in_path,
+            "-o",
+            out_stl,
+            "--res",
+            "20",
+            "--cell-size",
+            "4.0",
+            "--wall-thickness",
+            "1.0",
+            "--grade-mode",
+            "shell_to_core",
+            "--grade-wall-end",
+            "0.3",
+            "--grade-depth",
+            "2.5",
+        ],
+    )
+    assert main() == 0
+    assert (tmp_path / "graded_infill.stl").stat().st_size > 0
+
+
+def test_cli_graded_stl_infill_end(tmp_path, monkeypatch):
+    import trimesh
+
+    in_path = str(tmp_path / "cube2.stl")
+    out_stl = str(tmp_path / "graded_infill_end.stl")
+    cube = trimesh.creation.box(extents=[10.0, 10.0, 10.0])
+    cube.export(in_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "pyroid-cli",
+            "-i",
+            in_path,
+            "-o",
+            out_stl,
+            "--res",
+            "20",
+            "--infill",
+            "35",
+            "--wall-thickness",
+            "0.8",
+            "--grade-mode",
+            "axial_z",
+            "--grade-infill-end",
+            "15",
+        ],
+    )
+    assert main() == 0
+    assert (tmp_path / "graded_infill_end.stl").stat().st_size > 0

@@ -80,3 +80,40 @@ def test_gyroid_generation_progress_callback():
     assert all(0 <= p <= 100 for p in percentages)
     assert any("grid" in u[1].lower() for u in updates)
     assert any("isosurface" in u[1].lower() for u in updates)
+
+
+def test_stl_grading_validation_and_generation(tmp_path):
+    import trimesh
+
+    bad_mode = STLConversionParams(stl_path="test.stl", grade_mode="invalid_mode")
+    assert not bad_mode.validate()[0]
+
+    bad_wall = STLConversionParams(
+        stl_path="test.stl", grade_mode="shell_to_core", grade_wall_end=-0.5
+    )
+    assert not bad_wall.validate()[0]
+
+    bad_bias = STLConversionParams(
+        stl_path="test.stl", grade_mode="axial_z", grade_bias_end=2.0
+    )
+    assert not bad_bias.validate()[0]
+
+    cube_path = tmp_path / "cube.stl"
+    trimesh.creation.box(extents=[12.0, 12.0, 12.0]).export(cube_path)
+
+    gen = GyroidGenerator()
+    graded_params = STLConversionParams(
+        stl_path=str(cube_path),
+        tpms_type="gyroid",
+        resolution=24,
+        cell_size=4.0,
+        wall_thickness=1.0,
+        grade_mode="shell_to_core",
+        grade_wall_end=0.35,
+        grade_depth=3.0,
+    )
+    mesh = gen.convert_from_stl(graded_params, include_cavities=True)
+    assert mesh.n_cells > 0
+    assert mesh.volume > 0
+    assert gen.cavity_a is not None and gen.cavity_a.n_cells > 0
+    assert gen.cavity_b is not None and gen.cavity_b.n_cells > 0

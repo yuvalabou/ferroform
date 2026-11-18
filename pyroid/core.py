@@ -43,6 +43,9 @@ class GyroidGenerator:
         self.cavity_a: pv.PolyData | None = None
         self.cavity_b: pv.PolyData | None = None
         self._reference_volume: float | None = None
+        self.last_stl_params: STLConversionParams | None = None
+        self._input_bounds = None
+        self._input_surface_points = None
 
     def validate_params(self) -> tuple[bool, str]:
         """Validate parameters using the GyroidParams data model."""
@@ -79,6 +82,9 @@ class GyroidGenerator:
         self._reference_volume = (
             math.pi * max(0.0, r_outer**2 - r_inner**2) * self.params.c
         )
+        self.last_stl_params = None
+        self._input_bounds = None
+        self._input_surface_points = None
 
         return self.mesh
 
@@ -107,6 +113,13 @@ class GyroidGenerator:
 
         tri_mesh = load_trimesh(stl_params.stl_path)
         self._reference_volume = float(abs(tri_mesh.volume))
+        self.last_stl_params = stl_params
+        self._input_bounds = tri_mesh.bounds.copy()
+        verts = tri_mesh.vertices
+        if len(verts) > 20000:
+            step = max(1, len(verts) // 20000)
+            verts = verts[::step]
+        self._input_surface_points = verts.copy()
         self.mesh = convert_stl_to_gyroid(
             tri_mesh,
             stl_params,

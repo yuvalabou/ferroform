@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/pyroid-core",
-    "crates/pyroid-cli",
-    "crates/pyroid-gui",
+    "crates/ferroform-core",
+    "crates/ferroform-cli",
+    "crates/ferroform-gui",
 ]
 
 [workspace.package]

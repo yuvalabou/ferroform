@@ -1,7 +1,7 @@
 //! Triply Periodic Minimal Surface (TPMS) mathematical kernels and properties.
 //!
 //! Defines supported TPMS geometries, nodal level-set equations, radial variants,
-//! and calibrated thickness/surface factors matching `pyroid.tpms`.
+//! and calibrated thickness/surface factors matching the FerroForm TPMS specification.
 
 use serde::{Deserialize, Serialize};
 

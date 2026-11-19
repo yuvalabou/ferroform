@@ -986,6 +986,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferroform-cli"
+version = "2.0.0"
+dependencies = [
+ "clap",
+ "ferroform-core",
+ "serde_json",
+]
+
+[[package]]
+name = "ferroform-core"
+version = "2.0.0"
+dependencies = [
+ "rayon",
+ "serde",
+ "zip",
+]
+
+[[package]]
+name = "ferroform-gui"
+version = "2.0.0"
+dependencies = [
+ "bytemuck",
+ "eframe",
+ "egui",
+ "ferroform-core",
+ "glam",
+ "rfd",
+ "serde_json",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2249,37 +2280,6 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
-
-[[package]]
-name = "pyroid-cli"
-version = "2.0.0"
-dependencies = [
- "clap",
- "pyroid-core",
- "serde_json",
-]
-
-[[package]]
-name = "pyroid-core"
-version = "2.0.0"
-dependencies = [
- "rayon",
- "serde",
- "zip",
-]
-
-[[package]]
-name = "pyroid-gui"
-version = "2.0.0"
-dependencies = [
- "bytemuck",
- "eframe",
- "egui",
- "glam",
- "pyroid-core",
- "rfd",
- "serde_json",
-]
 
 [[package]]
 name = "quick-error"

@@ -7,7 +7,7 @@ use eframe::egui;
 use eframe::egui_wgpu::{self, wgpu};
 use eframe::wgpu::util::DeviceExt;
 use glam::{Mat4, Vec3};
-use pyroid_core::marching::MeshData;
+use ferroform_core::marching::MeshData;
 
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
@@ -297,12 +297,12 @@ impl GpuViewport {
         let egui_renderer = wgpu_state.renderer.clone();
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("pyroid_mesh_shader"),
+            label: Some("ferroform_mesh_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
         let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("pyroid_uniforms"),
+            label: Some("ferroform_uniforms"),
             contents: bytemuck::bytes_of(&Uniforms {
                 view_proj: Mat4::IDENTITY.to_cols_array_2d(),
                 camera_pos: [0.0, 0.0, 50.0, 1.0],
@@ -313,7 +313,7 @@ impl GpuViewport {
         });
 
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("pyroid_bgl"),
+            label: Some("ferroform_bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -327,7 +327,7 @@ impl GpuViewport {
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("pyroid_bg"),
+            label: Some("ferroform_bg"),
             layout: &bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -336,7 +336,7 @@ impl GpuViewport {
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("pyroid_pipeline_layout"),
+            label: Some("ferroform_pipeline_layout"),
             bind_group_layouts: &[&bgl],
             push_constant_ranges: &[],
         });
@@ -405,9 +405,9 @@ impl GpuViewport {
             })
         };
 
-        let opaque_pipeline = make_mesh_pipeline("pyroid_opaque", true, None);
+        let opaque_pipeline = make_mesh_pipeline("ferroform_opaque", true, None);
         let translucent_pipeline = make_mesh_pipeline(
-            "pyroid_translucent",
+            "ferroform_translucent",
             false,
             Some(wgpu::BlendState::ALPHA_BLENDING),
         );
@@ -430,7 +430,7 @@ impl GpuViewport {
         };
 
         let line_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("pyroid_lines"),
+            label: Some("ferroform_lines"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,

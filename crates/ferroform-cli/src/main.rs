@@ -1,24 +1,24 @@
-//! Command Line Interface (`pyroid-cli`) for PyRoid.
+//! Command Line Interface (`ferroform-cli`) for FerroForm.
 
 use std::path::PathBuf;
 use std::process;
 
 use clap::Parser;
-use pyroid_core::grading::{GradingMode, GradingParams};
-use pyroid_core::io::{read_stl, write_3mf, write_obj};
-use pyroid_core::manifold::{signed_volume_slices, write_binary_stl, DEFAULT_STL_HEADER};
-use pyroid_core::stats::{compute_mesh_stats, solve_cell_size};
-use pyroid_core::tpms::TpmsType;
-use pyroid_core::{
+use ferroform_core::grading::{GradingMode, GradingParams};
+use ferroform_core::io::{read_stl, write_3mf, write_obj};
+use ferroform_core::manifold::{signed_volume_slices, write_binary_stl, DEFAULT_STL_HEADER};
+use ferroform_core::stats::{compute_mesh_stats, solve_cell_size};
+use ferroform_core::tpms::TpmsType;
+use ferroform_core::{
     convert_stl, generate_parametric, GeneratedLattice, ParametricParams, ParametricShape,
     StlParams,
 };
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "pyroid-cli",
+    name = "ferroform-cli",
     version,
-    about = "PyRoid - Pure-Rust TPMS gyroid generator & volumetric STL lattice infill tool"
+    about = "FerroForm - Pure-Rust TPMS gyroid generator & volumetric STL lattice infill tool"
 )]
 struct Cli {
     /// Output mesh file path (.stl, .obj, or .3mf)
@@ -218,7 +218,7 @@ fn run() -> Result<(), String> {
         "stl" => write_binary_stl(&lattice.mesh, &cli.output, DEFAULT_STL_HEADER)?,
         "obj" => write_obj(&lattice.mesh, &cli.output)?,
         "3mf" => {
-            let mut parts: Vec<(&str, &pyroid_core::marching::MeshData)> =
+            let mut parts: Vec<(&str, &ferroform_core::marching::MeshData)> =
                 vec![("lattice", &lattice.mesh)];
             if include_cavities {
                 if let Some(ref ca) = lattice.cavity_a {

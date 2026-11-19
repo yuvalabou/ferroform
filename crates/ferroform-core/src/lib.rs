@@ -1,4 +1,4 @@
-//! Pure Rust TPMS & volumetric lattice generation engine for PyRoid.
+//! Pure Rust TPMS & volumetric lattice generation engine for FerroForm.
 
 pub mod bvh;
 pub mod csg;

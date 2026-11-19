@@ -1,14 +1,14 @@
 [package]
-name = "pyroid-cli"
+name = "ferroform-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "pyroid-cli"
+name = "ferroform-cli"
 path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-pyroid-core = { path = "../pyroid-core" }
+ferroform-core = { path = "../ferroform-core" }
 serde_json = "1"

@@ -1,20 +1,20 @@
-//! Main egui application state and UI for PyRoid.
+//! Main egui application state and UI for FerroForm.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Instant;
 
 use eframe::egui;
-use pyroid_core::grading::{GradingMode, GradingParams};
-use pyroid_core::io::{read_stl, write_3mf, write_obj};
-use pyroid_core::manifold::{signed_volume_slices, write_binary_stl, DEFAULT_STL_HEADER};
-use pyroid_core::marching::MeshData;
-use pyroid_core::stats::{
+use ferroform_core::grading::{GradingMode, GradingParams};
+use ferroform_core::io::{read_stl, write_3mf, write_obj};
+use ferroform_core::manifold::{signed_volume_slices, write_binary_stl, DEFAULT_STL_HEADER};
+use ferroform_core::marching::MeshData;
+use ferroform_core::stats::{
     compute_density_scalars, compute_mesh_stats, estimate_infill, mesh_bounds, solve_cell_size,
     solve_wall_thickness, MeshStats,
 };
-use pyroid_core::tpms::TpmsType;
-use pyroid_core::{
+use ferroform_core::tpms::TpmsType;
+use ferroform_core::{
     convert_stl, generate_parametric, GeneratedLattice, ParametricParams, ParametricShape,
     StlParams, Trimesh,
 };
@@ -332,7 +332,7 @@ impl StlFields {
     }
 }
 
-pub struct PyRoidApp {
+pub struct FerroFormApp {
     viewport: GpuViewport,
     dark_mode: bool,
     active_tab: ActiveTab,
@@ -396,7 +396,7 @@ fn configure_fonts_and_style(ctx: &egui::Context) {
     });
 }
 
-impl PyRoidApp {
+impl FerroFormApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let wgpu_state = cc
             .wgpu_render_state
@@ -1126,7 +1126,7 @@ impl PyRoidApp {
     }
 }
 
-impl eframe::App for PyRoidApp {
+impl eframe::App for FerroFormApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_worker();
         self.poll_dialog();
@@ -1394,7 +1394,7 @@ impl eframe::App for PyRoidApp {
     }
 }
 
-impl PyRoidApp {
+impl FerroFormApp {
     fn ui_stl_tab(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.group(|ui| {
             ui.strong("Input Mesh (STL)");

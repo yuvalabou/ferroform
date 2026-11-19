@@ -162,7 +162,7 @@ pub fn write_obj(mesh: &MeshData, path: &Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to create OBJ file '{}': {e}", path.display()))?;
     let mut w = BufWriter::with_capacity(256 * 1024, file);
 
-    writeln!(w, "# PyRoid OBJ Export")
+    writeln!(w, "# FerroForm OBJ Export")
         .map_err(|e| format!("OBJ write error: {e}"))?;
     for p in &mesh.points {
         writeln!(w, "v {:.6} {:.6} {:.6}", p[0], p[1], p[2])
@@ -287,8 +287,8 @@ mod tests {
     #[test]
     fn binary_stl_round_trip() {
         let mesh = sample_tetrahedron();
-        let tmp = std::env::temp_dir().join("pyroid_test_roundtrip.stl");
-        write_binary_stl(&mesh, &tmp, "PyRoid test").unwrap();
+        let tmp = std::env::temp_dir().join("ferroform_test_roundtrip.stl");
+        write_binary_stl(&mesh, &tmp, "FerroForm test").unwrap();
         let loaded = read_stl(&tmp).unwrap();
         let _ = fs::remove_file(&tmp);
         assert_eq!(loaded.vertices.len(), 4);
@@ -316,8 +316,8 @@ endsolid test
     #[test]
     fn obj_and_3mf_export() {
         let mesh = sample_tetrahedron();
-        let obj_path = std::env::temp_dir().join("pyroid_test_export.obj");
-        let mf_path = std::env::temp_dir().join("pyroid_test_export.3mf");
+        let obj_path = std::env::temp_dir().join("ferroform_test_export.obj");
+        let mf_path = std::env::temp_dir().join("ferroform_test_export.3mf");
         write_obj(&mesh, &obj_path).unwrap();
         write_3mf(&[("lattice", &mesh)], &mf_path, "millimeter").unwrap();
 

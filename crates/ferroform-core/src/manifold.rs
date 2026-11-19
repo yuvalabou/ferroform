@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::marching::MeshData;
 
 /// Default binary STL header matching Farsoon BuildStar and Netfabb requirements.
-pub const DEFAULT_STL_HEADER: &str = "PyRoid 3D Model - Farsoon BuildStar and Netfabb Compatible";
+pub const DEFAULT_STL_HEADER: &str = "FerroForm 3D Model - Farsoon BuildStar and Netfabb Compatible";
 
 /// Compute the signed volume of indexed triangle slices via the divergence theorem.
 pub fn signed_volume_slices(points: &[[f32; 3]], faces: &[[u32; 3]]) -> f64 {
@@ -55,8 +55,8 @@ fn format_stl_header(header_text: &str) -> [u8; 80] {
         .collect();
 
     if cleaned.len() >= 5 && cleaned[..5].eq_ignore_ascii_case(b"solid") {
-        let mut prefixed = Vec::with_capacity(7 + cleaned.len());
-        prefixed.extend_from_slice(b"PyRoid ");
+        let mut prefixed = Vec::with_capacity(10 + cleaned.len());
+        prefixed.extend_from_slice(b"FerroForm ");
         prefixed.extend_from_slice(&cleaned);
         cleaned = prefixed;
     }
@@ -218,14 +218,14 @@ mod tests {
             [0, 1, 1],
         ];
         let mesh = MeshData { points, faces };
-        let tmp_path = std::env::temp_dir().join("pyroid_test_direct_writer.stl");
+        let tmp_path = std::env::temp_dir().join("ferroform_test_direct_writer.stl");
 
         write_binary_stl(&mesh, &tmp_path, "solid\nexported").unwrap();
         let bytes = std::fs::read(&tmp_path).unwrap();
         let _ = std::fs::remove_file(&tmp_path);
 
-        assert_eq!(&bytes[..21], b"PyRoid solid exported");
-        assert_eq!(&bytes[21..80], &[b' '; 59]);
+        assert_eq!(&bytes[..24], b"FerroForm solid exported");
+        assert_eq!(&bytes[24..80], &[b' '; 56]);
 
         let n_faces = u32::from_le_bytes(bytes[80..84].try_into().unwrap());
         assert_eq!(n_faces, 4);
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn test_write_binary_stl_empty_mesh() {
         let mesh = MeshData::default();
-        let tmp_path = std::env::temp_dir().join("pyroid_test_empty_writer.stl");
+        let tmp_path = std::env::temp_dir().join("ferroform_test_empty_writer.stl");
         write_binary_stl(&mesh, &tmp_path, DEFAULT_STL_HEADER).unwrap();
         let bytes = std::fs::read(&tmp_path).unwrap();
         let _ = std::fs::remove_file(&tmp_path);

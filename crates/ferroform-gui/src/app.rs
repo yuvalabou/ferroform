@@ -99,8 +99,8 @@ struct ParametricFields {
     r2: String,
     phi_scale: String,
     wall_thickness: String,
-    cell_radius: String,
-    cell_height: String,
+    cell_count_xy: String,
+    cell_count_z: String,
     bias: String,
     seed: String,
     blend_passes: usize,
@@ -120,8 +120,8 @@ impl Default for ParametricFields {
             r2: String::new(),
             phi_scale: String::new(),
             wall_thickness: String::new(),
-            cell_radius: String::new(),
-            cell_height: String::new(),
+            cell_count_xy: String::new(),
+            cell_count_z: String::new(),
             bias: String::new(),
             seed: "42".to_string(),
             blend_passes: 0,
@@ -143,8 +143,8 @@ impl ParametricFields {
         self.r2 = format!("{}", p.r2);
         self.phi_scale = format!("{}", p.phi_scale);
         self.wall_thickness = format!("{}", p.wall_thickness);
-        self.cell_radius = format!("{}", p.cell_radius);
-        self.cell_height = format!("{}", p.cell_height);
+        self.cell_count_xy = format!("{}", p.cell_count_xy);
+        self.cell_count_z = format!("{}", p.cell_count_z);
         self.bias = format!("{}", p.bias);
         self.seed = p.seed.to_string();
         self.blend_passes = p.blend_passes;
@@ -177,8 +177,8 @@ impl ParametricFields {
             r2: parse_f(&self.r2, "Inner Radius")?,
             phi_scale: parse_f(&self.phi_scale, "Angular Scaling")?,
             wall_thickness: parse_f(&self.wall_thickness, "Wall Thickness")?,
-            cell_radius: parse_f(&self.cell_radius, "Cell Radius")?,
-            cell_height: parse_f(&self.cell_height, "Cell Height")?,
+            cell_count_xy: parse_f(&self.cell_count_xy, "XY Cell Count")?,
+            cell_count_z: parse_f(&self.cell_count_z, "Z Cell Count")?,
             bias: parse_f(&self.bias, "Bias")?,
             include_cavities: true,
             seed,
@@ -1850,8 +1850,8 @@ impl FerroFormApp {
                     row("Inner Radius (r2):", &mut self.param.r2, is_cyl);
                     row("Angular Scaling:", &mut self.param.phi_scale, is_cyl);
                     row("Wall Thickness:", &mut self.param.wall_thickness, is_cyl);
-                    row("Cell Radius:", &mut self.param.cell_radius, true);
-                    row("Cell Height:", &mut self.param.cell_height, true);
+                    row("XY Cell Count:", &mut self.param.cell_count_xy, true);
+                    row("Z Cell Count:", &mut self.param.cell_count_z, true);
                     row("Cavity A/B Bias (-1..1):", &mut self.param.bias, true);
                 });
         });

@@ -65,8 +65,10 @@ pub struct ParametricParams {
     pub r2: f64,
     pub phi_scale: f64,
     pub wall_thickness: f64,
-    pub cell_radius: f64,
-    pub cell_height: f64,
+    #[serde(alias = "cell_radius")]
+    pub cell_count_xy: f64,
+    #[serde(alias = "cell_height")]
+    pub cell_count_z: f64,
     pub bias: f64,
     pub include_cavities: bool,
     #[serde(default = "default_seed")]
@@ -88,8 +90,8 @@ impl Default for ParametricParams {
             r2: 0.0,
             phi_scale: 8.0,
             wall_thickness: 11.5,
-            cell_radius: 2.0,
-            cell_height: 3.0,
+            cell_count_xy: 2.0,
+            cell_count_z: 3.0,
             bias: 0.0,
             include_cavities: true,
             seed: default_seed(),
@@ -107,8 +109,8 @@ impl ParametricParams {
                 "fine_detail",
                 Self {
                     res: 120,
-                    cell_radius: 1.5,
-                    cell_height: 2.5,
+                    cell_count_xy: 1.5,
+                    cell_count_z: 2.5,
                     ..Self::default()
                 },
             ),
@@ -124,8 +126,8 @@ impl ParametricParams {
                 Self {
                     res: 100,
                     phi_scale: 12.0,
-                    cell_radius: 1.2,
-                    cell_height: 1.8,
+                    cell_count_xy: 1.2,
+                    cell_count_z: 1.8,
                     ..Self::default()
                 },
             ),
@@ -158,8 +160,8 @@ impl ParametricParams {
                 return Err("Wall thickness must be positive".to_string());
             }
         }
-        if self.cell_radius <= 0.0 || self.cell_height <= 0.0 {
-            return Err("Cell radius and height must be positive".to_string());
+        if self.cell_count_xy <= 0.0 || self.cell_count_z <= 0.0 {
+            return Err("XY and Z cell counts must be positive".to_string());
         }
         if !(-1.4..=1.4).contains(&self.bias) {
             return Err("Bias must be between -1.4 and 1.4".to_string());
@@ -286,13 +288,13 @@ pub fn generate_parametric(
     let total = res * res * res;
     let mut main_field = vec![1.0; total];
 
-    let scale_x = 2.0 * PI * params.cell_radius / params.a;
-    let scale_y = 2.0 * PI * params.cell_radius / params.b;
-    let scale_z = 2.0 * PI * params.cell_height / params.c;
+    let scale_x = 2.0 * PI * params.cell_count_xy / params.a;
+    let scale_y = 2.0 * PI * params.cell_count_xy / params.b;
+    let scale_z = 2.0 * PI * params.cell_count_z / params.c;
 
     let zs = linspace(0.0, params.c, res);
     let voronoi_field = if params.tpms_type == TpmsType::Voronoi {
-        let v_cell = (params.a / params.cell_radius.max(0.1)).max(0.5);
+        let v_cell = (params.a / params.cell_count_xy.max(0.1)).max(0.5);
         let pad = 1.5 * v_cell;
         let (min_b, max_b) = match params.shape {
             ParametricShape::Cylinder => (
@@ -927,8 +929,8 @@ mod tests {
                     r2: 0.0,
                     phi_scale: 8.0,
                     wall_thickness: 11.5,
-                    cell_radius: 2.0,
-                    cell_height: 3.0,
+                    cell_count_xy: 2.0,
+                    cell_count_z: 3.0,
                     bias: 0.0,
                     include_cavities: true,
                     seed: 42,

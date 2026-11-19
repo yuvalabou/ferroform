@@ -117,13 +117,13 @@ struct Cli {
     #[arg(long, default_value_t = 8.0)]
     phi_scale: f64,
 
-    /// Parametric cell radial/angular pore frequency
-    #[arg(long, default_value_t = 2.0)]
-    cell_radius: f64,
+    /// Parametric XY cell count (number of unit cells across a/b)
+    #[arg(long = "cells-xy", alias = "cell-radius", default_value_t = 2.0)]
+    cell_count_xy: f64,
 
-    /// Parametric cell vertical pore frequency
-    #[arg(long, default_value_t = 3.0)]
-    cell_height: f64,
+    /// Parametric Z cell count (number of unit cells along height c)
+    #[arg(long = "cells-z", alias = "cell-height", default_value_t = 3.0)]
+    cell_count_z: f64,
 
     /// Skip generating Cavity A / Cavity B meshes (faster, smaller 3MF)
     #[arg(long, default_value_t = false)]
@@ -205,8 +205,8 @@ fn run() -> Result<(), String> {
             r2: cli.r2,
             phi_scale: cli.phi_scale,
             wall_thickness: cli.wall_thickness.unwrap_or(11.5),
-            cell_radius: cli.cell_radius,
-            cell_height: cli.cell_height,
+            cell_count_xy: cli.cell_count_xy,
+            cell_count_z: cli.cell_count_z,
             bias: cli.bias,
             include_cavities,
             seed: cli.seed,

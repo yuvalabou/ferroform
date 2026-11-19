@@ -1850,9 +1850,43 @@ impl FerroFormApp {
                     row("Inner Radius (r2):", &mut self.param.r2, is_cyl);
                     row("Angular Scaling:", &mut self.param.phi_scale, is_cyl);
                     row("Wall Thickness:", &mut self.param.wall_thickness, is_cyl);
-                    row("XY Cell Count:", &mut self.param.cell_count_xy, true);
-                    row("Z Cell Count:", &mut self.param.cell_count_z, true);
+                    let is_voronoi = self.param.tpms_type == TpmsType::Voronoi;
+                    row(
+                        if is_voronoi {
+                            "Approx. Cells (X):"
+                        } else {
+                            "XY Cell Count:"
+                        },
+                        &mut self.param.cell_count_xy,
+                        true,
+                    );
+                    row("Z Cell Count:", &mut self.param.cell_count_z, !is_voronoi);
                     row("Cavity A/B Bias (-1..1):", &mut self.param.bias, true);
+
+                    if is_voronoi {
+                        ui.label("Poisson Seed:");
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.param.seed).desired_width(68.0),
+                            );
+                            if ui.button("Rnd").clicked() {
+                                let next = self
+                                    .param
+                                    .seed
+                                    .trim()
+                                    .parse::<u64>()
+                                    .unwrap_or(42)
+                                    .wrapping_mul(6364136223846793005)
+                                    .wrapping_add(1442695040888963407);
+                                self.param.seed = (next % 100_000).to_string();
+                            }
+                        });
+                        ui.end_row();
+                    }
+
+                    ui.label("Blend Passes:");
+                    ui.add(egui::Slider::new(&mut self.param.blend_passes, 0..=4));
+                    ui.end_row();
                 });
         });
 

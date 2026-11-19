@@ -1263,12 +1263,12 @@ impl eframe::App for FerroFormApp {
                         ui.selectable_value(
                             &mut self.active_tab,
                             ActiveTab::Stl,
-                            "STL to Gyroid Volume",
+                            "STL to Lattice Volume",
                         );
                         ui.selectable_value(
                             &mut self.active_tab,
                             ActiveTab::Parametric,
-                            "Parametric Gyroid",
+                            "Parametric Lattice",
                         );
                     });
                     ui.separator();
@@ -1892,7 +1892,7 @@ impl FerroFormApp {
 
         ui.add_space(6.0);
         ui.add_enabled_ui(!self.is_busy(), |ui| {
-            let btn = egui::Button::new(egui::RichText::new("Generate Gyroid").strong())
+            let btn = egui::Button::new(egui::RichText::new("Generate Lattice").strong())
                 .min_size(egui::vec2(ui.available_width(), 32.0));
             if ui.add(btn).clicked() {
                 self.start_parametric_generation(ctx);

@@ -3,11 +3,13 @@
 use std::f64::consts::PI;
 
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::tpms::TpmsType;
 
 /// Supported spatial grading profiles for volumetric STL lattice conversion.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GradingMode {
     #[default]
     None,
@@ -53,7 +55,7 @@ impl GradingMode {
 }
 
 /// Configuration for spatially varying `wall_thickness`, `bias`, and `cell_size`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct GradingParams {
     pub mode: GradingMode,
     pub wall_thickness_end: Option<f64>,

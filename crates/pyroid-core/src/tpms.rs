@@ -3,12 +3,17 @@
 //! Defines supported TPMS geometries, nodal level-set equations, radial variants,
 //! and calibrated thickness/surface factors matching `pyroid.tpms`.
 
+use serde::{Deserialize, Serialize};
+
 /// Supported TPMS scaffold geometries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TpmsType {
+    #[default]
     Gyroid,
     Diamond,
     Primitive,
+    #[serde(rename = "i_wp")]
     IWP,
     FischerKochS,
     Neovius,

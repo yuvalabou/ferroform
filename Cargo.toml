@@ -2,10 +2,11 @@
 resolver = "2"
 members = [
     "crates/pyroid-core",
-    "crates/pyroid-pyo3",
+    "crates/pyroid-cli",
+    "crates/pyroid-gui",
 ]
 
 [workspace.package]
-version = "1.1.0"
+version = "2.0.0"
 edition = "2021"
 license = "MIT"

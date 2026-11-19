@@ -4,14 +4,17 @@ pub mod bvh;
 pub mod csg;
 pub mod edt;
 pub mod grading;
+pub mod io;
 pub mod manifold;
 pub mod marching;
 mod mc_tables;
+pub mod stats;
 pub mod tpms;
 
 use std::f64::consts::PI;
 
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::grading::{
     compute_grading_factors, eval_tpms_with_grading, lerp, GradingMode, GradingParams,
@@ -22,7 +25,8 @@ use crate::marching::{
 use crate::tpms::TpmsType;
 
 /// Domain shape for parametric TPMS generation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ParametricShape {
     #[default]
     Cylinder,
@@ -42,7 +46,8 @@ impl ParametricShape {
 }
 
 /// Parameters for parametric TPMS generation (cylindrical or Cartesian box).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ParametricParams {
     pub tpms_type: TpmsType,
     pub shape: ParametricShape,
@@ -60,7 +65,72 @@ pub struct ParametricParams {
     pub include_cavities: bool,
 }
 
+impl Default for ParametricParams {
+    fn default() -> Self {
+        Self {
+            tpms_type: TpmsType::Gyroid,
+            shape: ParametricShape::Cylinder,
+            res: 80,
+            a: 24.0,
+            b: 24.0,
+            c: 10.0,
+            r1: 12.0,
+            r2: 0.0,
+            phi_scale: 8.0,
+            wall_thickness: 11.5,
+            cell_radius: 2.0,
+            cell_height: 3.0,
+            bias: 0.0,
+            include_cavities: true,
+        }
+    }
+}
+
 impl ParametricParams {
+    /// Return named parametric presets matching the legacy Python preset definitions.
+    pub fn presets() -> [(&'static str, Self); 4] {
+        [
+            ("default", Self::default()),
+            (
+                "fine_detail",
+                Self {
+                    res: 120,
+                    cell_radius: 1.5,
+                    cell_height: 2.5,
+                    ..Self::default()
+                },
+            ),
+            (
+                "thick_walls",
+                Self {
+                    wall_thickness: 15.0,
+                    ..Self::default()
+                },
+            ),
+            (
+                "dense_pattern",
+                Self {
+                    res: 100,
+                    phi_scale: 12.0,
+                    cell_radius: 1.2,
+                    cell_height: 1.8,
+                    ..Self::default()
+                },
+            ),
+        ]
+    }
+
+    /// Reference bounding volume used for porosity calculation.
+    pub fn reference_volume(&self) -> f64 {
+        match self.shape {
+            ParametricShape::Box => self.a * self.b * self.c,
+            ParametricShape::Cylinder => {
+                let r_inner = (self.r1 - self.wall_thickness).max(0.0);
+                let r_outer = self.r1;
+                PI * (r_outer * r_outer - r_inner * r_inner).max(0.0) * self.c
+            }
+        }
+    }
     pub fn validate(&self) -> Result<(), String> {
         if self.res == 0 {
             return Err("Resolution must be a positive integer".to_string());
@@ -87,7 +157,7 @@ impl ParametricParams {
 }
 
 /// Parameters for volumetric STL TPMS lattice infill conversion.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StlParams {
     pub tpms_type: TpmsType,
     pub resolution: usize,
@@ -399,26 +469,20 @@ pub fn convert_stl(
 
     let is_shell_void = params.preserve_shell && params.shell_thickness > 0.0;
     let grading_active = params.grading.is_active();
-    let need_edt =
-        is_shell_void || (grading_active && params.grading.mode == GradingMode::ShellToCore);
 
     let dx = grid_extent[0] / ((nx - 1).max(1) as f64);
     let dy = grid_extent[1] / ((ny - 1).max(1) as f64);
     let dz = grid_extent[2] / ((nz - 1).max(1) as f64);
 
-    let dist_inside = if need_edt {
-        progress(
-            38,
-            if is_shell_void {
-                "Computing shell distance transform..."
-            } else {
-                "Computing interior distance transform for grading..."
-            },
-        );
-        Some(edt::edt_3d(&inside_3d, nx, ny, nz, dx, dy, dz))
-    } else {
-        None
-    };
+    progress(
+        38,
+        if is_shell_void {
+            "Computing shell distance transform..."
+        } else {
+            "Computing signed distance field..."
+        },
+    );
+    let mut dist_inside = Some(edt::edt_3d(&inside_3d, nx, ny, nz, dx, dy, dz));
 
     let u_field = if grading_active {
         Some(compute_grading_factors(
@@ -455,7 +519,6 @@ pub fn convert_stl(
         .for_each(|(i, slab)| {
             let x = xs[i];
             let kx = k_wave * x;
-            let in_slab = &inside_3d[i * ny * nz..(i + 1) * ny * nz];
             let u_slab = u_field
                 .as_ref()
                 .map(|uf| &uf[i * ny * nz..(i + 1) * ny * nz]);
@@ -464,30 +527,28 @@ pub fn convert_stl(
                 let row_off = j * nz;
                 for (k, &z) in zs.iter().enumerate() {
                     let idx = row_off + k;
-                    if is_shell_void || in_slab[idx] {
-                        slab[idx] = if let Some(us) = u_slab {
-                            let u = us[idx];
-                            let bias = params
-                                .grading
-                                .bias_end
-                                .map_or(params.bias, |b_end| lerp(params.bias, b_end, u));
-                            eval_tpms_with_grading(
-                                params.tpms_type,
-                                x,
-                                y,
-                                z,
-                                u,
-                                params.cell_size,
-                                params.grading.cell_size_end,
-                                params.grading.mode,
-                                min_b,
-                                extent,
-                                center,
-                            ) + bias
-                        } else {
-                            params.tpms_type.eval(kx, ky, k_wave * z) + params.bias
-                        };
-                    }
+                    slab[idx] = if let Some(us) = u_slab {
+                        let u = us[idx];
+                        let bias = params
+                            .grading
+                            .bias_end
+                            .map_or(params.bias, |b_end| lerp(params.bias, b_end, u));
+                        eval_tpms_with_grading(
+                            params.tpms_type,
+                            x,
+                            y,
+                            z,
+                            u,
+                            params.cell_size,
+                            params.grading.cell_size_end,
+                            params.grading.mode,
+                            min_b,
+                            extent,
+                            center,
+                        ) + bias
+                    } else {
+                        params.tpms_type.eval(kx, ky, k_wave * z) + params.bias
+                    };
                 }
             }
         });
@@ -660,24 +721,45 @@ pub fn convert_stl(
     }
 
     progress(75, "Extracting gyroid isosurface contour...");
-    let field: Vec<f64> = (0..total)
-        .into_par_iter()
-        .map(|idx| {
-            if !inside_3d[idx] {
-                1.0
-            } else if params.is_skeletal {
-                let sk = skeletal_field
-                    .as_ref()
-                    .map_or(skeletal_scalar, |sf| sf[idx]);
-                scalar_val[idx] - sk
-            } else {
-                let t_val = t_field.as_ref().map_or(t_scalar, |tf| tf[idx]);
-                scalar_val[idx].abs() - t_val
-            }
-        })
-        .collect();
+    let voxel_h = dx.max(dy).max(dz).max(1e-6);
+    let sdf_norm: Vec<f64> = {
+        let dist_in = dist_inside
+            .take()
+            .expect("dist_inside must be computed for SDF boundary");
+        let outside_3d: Vec<bool> = inside_3d.par_iter().map(|&b| !b).collect();
+        let dist_outside = edt::edt_3d(&outside_3d, nx, ny, nz, dx, dy, dz);
+        (0..total)
+            .into_par_iter()
+            .map(|idx| {
+                let signed = if inside_3d[idx] {
+                    -(dist_in[idx] - 0.5 * voxel_h)
+                } else {
+                    dist_outside[idx] - 0.5 * voxel_h
+                };
+                signed / voxel_h
+            })
+            .collect()
+    };
 
-    let mut mesh = extract_isosurface_cartesian(&xs, &ys, &zs, &field);
+    let mut mesh = {
+        let field: Vec<f64> = (0..total)
+            .into_par_iter()
+            .map(|idx| {
+                let tpms_f = if params.is_skeletal {
+                    let sk = skeletal_field
+                        .as_ref()
+                        .map_or(skeletal_scalar, |sf| sf[idx]);
+                    scalar_val[idx] - sk
+                } else {
+                    let t_val = t_field.as_ref().map_or(t_scalar, |tf| tf[idx]);
+                    scalar_val[idx].abs() - t_val
+                };
+                tpms_f.max(sdf_norm[idx])
+            })
+            .collect();
+        extract_isosurface_cartesian(&xs, &ys, &zs, &field)
+    };
+    drop(sdf_norm);
     manifold::ensure_positive_volume(&mut mesh);
     if params.flat_cap {
         progress(88, "Applying flat Z-plane caps...");

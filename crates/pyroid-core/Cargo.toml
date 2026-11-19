@@ -6,3 +6,5 @@ license.workspace = true
 
 [dependencies]
 rayon = "1.10"
+serde = { version = "1", features = ["derive"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }

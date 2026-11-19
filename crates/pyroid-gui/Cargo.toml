@@ -1,0 +1,18 @@
+[package]
+name = "pyroid-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pyroid-gui"
+path = "src/main.rs"
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "wgpu"] }
+egui = "0.31"
+glam = "0.29"
+pyroid-core = { path = "../pyroid-core" }
+rfd = "0.15"
+serde_json = "1"

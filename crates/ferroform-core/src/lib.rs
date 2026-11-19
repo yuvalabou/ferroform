@@ -10,6 +10,7 @@ pub mod marching;
 mod mc_tables;
 pub mod stats;
 pub mod tpms;
+pub mod voronoi;
 
 use std::f64::consts::PI;
 
@@ -23,6 +24,11 @@ use crate::marching::{
     extract_isosurface_cartesian, extract_isosurface_cylindrical, MeshData,
 };
 use crate::tpms::TpmsType;
+use crate::voronoi::{effective_min_dist, smooth_scalar_field, VoronoiField};
+
+fn default_seed() -> u64 {
+    42
+}
 
 /// Domain shape for parametric TPMS generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -63,6 +69,10 @@ pub struct ParametricParams {
     pub cell_height: f64,
     pub bias: f64,
     pub include_cavities: bool,
+    #[serde(default = "default_seed")]
+    pub seed: u64,
+    #[serde(default)]
+    pub blend_passes: usize,
 }
 
 impl Default for ParametricParams {
@@ -82,6 +92,8 @@ impl Default for ParametricParams {
             cell_height: 3.0,
             bias: 0.0,
             include_cavities: true,
+            seed: default_seed(),
+            blend_passes: 0,
         }
     }
 }
@@ -171,6 +183,10 @@ pub struct StlParams {
     pub infill_percent: Option<f64>,
     pub include_cavities: bool,
     pub grading: GradingParams,
+    #[serde(default = "default_seed")]
+    pub seed: u64,
+    #[serde(default)]
+    pub blend_passes: usize,
 }
 
 pub type InfillParams = StlParams;
@@ -275,6 +291,23 @@ pub fn generate_parametric(
     let scale_z = 2.0 * PI * params.cell_height / params.c;
 
     let zs = linspace(0.0, params.c, res);
+    let voronoi_field = if params.tpms_type == TpmsType::Voronoi {
+        let v_cell = (params.a / params.cell_radius.max(0.1)).max(0.5);
+        let pad = 1.5 * v_cell;
+        let (min_b, max_b) = match params.shape {
+            ParametricShape::Cylinder => (
+                [-params.r1 - pad, -params.r1 - pad, -pad],
+                [params.r1 + pad, params.r1 + pad, params.c + pad],
+            ),
+            ParametricShape::Box => (
+                [-0.5 * params.a - pad, -0.5 * params.b - pad, -pad],
+                [0.5 * params.a + pad, 0.5 * params.b + pad, params.c + pad],
+            ),
+        };
+        Some((VoronoiField::new(min_b, max_b, v_cell, params.seed), v_cell))
+    } else {
+        None
+    };
 
     // Coordinate grid and field evaluation differ by shape; cavity extraction shares the rest.
     let (mask_i, jk_bounds, xs_or_rs, ys_or_phis, cyl_ky) = match params.shape {
@@ -305,12 +338,19 @@ pub fn generate_parametric(
                         return;
                     }
                     let x = r_aux[i] * scale_x;
+                    let r_phys = rs[i];
                     for (j, &phi) in phis.iter().enumerate() {
                         let y = phi * params.phi_scale * scale_y;
+                        let angle = ky * phi;
+                        let px = r_phys * angle.cos();
+                        let py = r_phys * angle.sin();
                         let row_off = j * res;
                         for (k, &z) in zs.iter().enumerate() {
-                            slab[row_off + k] =
-                                params.tpms_type.eval_radial(x, y, z * scale_z) + params.bias;
+                            slab[row_off + k] = if let Some((ref vf, v_cell)) = voronoi_field {
+                                vf.eval_strut(px, py, z) - 0.35 * v_cell + params.bias
+                            } else {
+                                params.tpms_type.eval_radial(x, y, z * scale_z) + params.bias
+                            };
                         }
                     }
                 });
@@ -341,12 +381,17 @@ pub fn generate_parametric(
                         return;
                     }
                     let x = xs[i] * scale_x;
+                    let px = xs[i];
                     for j in 1..inner_end {
                         let y = ys[j] * scale_y;
+                        let py = ys[j];
                         let row_off = j * res;
                         for k in 1..inner_end {
-                            slab[row_off + k] =
-                                params.tpms_type.eval(x, y, zs[k] * scale_z) + params.bias;
+                            slab[row_off + k] = if let Some((ref vf, v_cell)) = voronoi_field {
+                                vf.eval_strut(px, py, zs[k]) - 0.35 * v_cell + params.bias
+                            } else {
+                                params.tpms_type.eval(x, y, zs[k] * scale_z) + params.bias
+                            };
                         }
                     }
                 });
@@ -355,6 +400,10 @@ pub fn generate_parametric(
             (mask_i, (1..inner_end, 1..inner_end), xs, ys, None)
         }
     };
+
+    if params.blend_passes > 0 {
+        smooth_scalar_field(&mut main_field, res, res, res, params.blend_passes);
+    }
 
     let extract = |field: &[f64]| -> MeshData {
         let mut m = match cyl_ky {
@@ -368,7 +417,7 @@ pub fn generate_parametric(
     progress(80, "Extracting isosurface contour...");
     let mesh = extract(&main_field);
 
-    let (cavity_a, cavity_b) = if params.include_cavities {
+    let (cavity_a, cavity_b) = if params.include_cavities && params.tpms_type != TpmsType::Voronoi {
         let t_sheet = 0.2 * (params.tpms_type.thickness_multiplier() / 4.80);
         let mut cav_a_field = vec![1.0; total];
         let mut cav_b_field = vec![1.0; total];
@@ -513,45 +562,84 @@ pub fn convert_stl(
     ];
     let k_wave = 2.0 * PI / params.cell_size.max(0.001);
     let mut scalar_val = vec![0.0; total];
-    scalar_val
-        .par_chunks_mut(ny * nz)
-        .enumerate()
-        .for_each(|(i, slab)| {
-            let x = xs[i];
-            let kx = k_wave * x;
-            let u_slab = u_field
-                .as_ref()
-                .map(|uf| &uf[i * ny * nz..(i + 1) * ny * nz]);
-            for (j, &y) in ys.iter().enumerate() {
-                let ky = k_wave * y;
-                let row_off = j * nz;
-                for (k, &z) in zs.iter().enumerate() {
-                    let idx = row_off + k;
-                    slab[idx] = if let Some(us) = u_slab {
-                        let u = us[idx];
-                        let bias = params
-                            .grading
-                            .bias_end
-                            .map_or(params.bias, |b_end| lerp(params.bias, b_end, u));
-                        eval_tpms_with_grading(
-                            params.tpms_type,
-                            x,
-                            y,
-                            z,
-                            u,
-                            params.cell_size,
-                            params.grading.cell_size_end,
-                            params.grading.mode,
-                            min_b,
-                            extent,
-                            center,
-                        ) + bias
-                    } else {
-                        params.tpms_type.eval(kx, ky, k_wave * z) + params.bias
-                    };
+    let is_voronoi = params.tpms_type == TpmsType::Voronoi;
+
+    if is_voronoi {
+        let r_min = effective_min_dist(params.cell_size, params.wall_thickness, params.is_skeletal);
+        let pad = 1.5 * r_min;
+        let v_min = [
+            xs[0] - pad,
+            ys[0] - pad,
+            zs[0] - pad,
+        ];
+        let v_max = [
+            xs[nx - 1] + pad,
+            ys[ny - 1] + pad,
+            zs[nz - 1] + pad,
+        ];
+        let vfield = VoronoiField::new(v_min, v_max, r_min, params.seed);
+        scalar_val
+            .par_chunks_mut(ny * nz)
+            .enumerate()
+            .for_each(|(i, slab)| {
+                let x = xs[i];
+                for (j, &y) in ys.iter().enumerate() {
+                    let row_off = j * nz;
+                    for (k, &z) in zs.iter().enumerate() {
+                        slab[row_off + k] = if params.is_skeletal {
+                            vfield.eval_strut(x, y, z)
+                        } else {
+                            vfield.eval_foam(x, y, z)
+                        };
+                    }
                 }
-            }
-        });
+            });
+    } else {
+        scalar_val
+            .par_chunks_mut(ny * nz)
+            .enumerate()
+            .for_each(|(i, slab)| {
+                let x = xs[i];
+                let kx = k_wave * x;
+                let u_slab = u_field
+                    .as_ref()
+                    .map(|uf| &uf[i * ny * nz..(i + 1) * ny * nz]);
+                for (j, &y) in ys.iter().enumerate() {
+                    let ky = k_wave * y;
+                    let row_off = j * nz;
+                    for (k, &z) in zs.iter().enumerate() {
+                        let idx = row_off + k;
+                        slab[idx] = if let Some(us) = u_slab {
+                            let u = us[idx];
+                            let bias = params
+                                .grading
+                                .bias_end
+                                .map_or(params.bias, |b_end| lerp(params.bias, b_end, u));
+                            eval_tpms_with_grading(
+                                params.tpms_type,
+                                x,
+                                y,
+                                z,
+                                u,
+                                params.cell_size,
+                                params.grading.cell_size_end,
+                                params.grading.mode,
+                                min_b,
+                                extent,
+                                center,
+                            ) + bias
+                        } else {
+                            params.tpms_type.eval(kx, ky, k_wave * z) + params.bias
+                        };
+                    }
+                }
+            });
+    }
+
+    if params.blend_passes > 0 {
+        progress(58, "Applying voxel scalar-field blending pass...");
+        smooth_scalar_field(&mut scalar_val, nx, ny, nz, params.blend_passes);
+    }
 
     let any_inside = inside_3d.iter().any(|&b| b);
     let q = params
@@ -570,6 +658,9 @@ pub fn convert_stl(
             .map_or(params.wall_thickness, |w_end| {
                 lerp(params.wall_thickness, w_end, u)
             });
+        if is_voronoi {
+            return w.max(0.05);
+        }
         let c = params
             .grading
             .cell_size_end
@@ -584,6 +675,10 @@ pub fn convert_stl(
             .map_or(params.wall_thickness, |w_end| {
                 lerp(params.wall_thickness, w_end, u)
             });
+        if is_voronoi {
+            // d3 - d1 ~= sqrt(3) * r_strut, where r_strut = 0.5 * wall_thickness
+            return 0.5 * w.max(0.05) * 3.0_f64.sqrt();
+        }
         let c = params
             .grading
             .cell_size_end
@@ -626,7 +721,7 @@ pub fn convert_stl(
     };
 
     let extract_cavities = |mask: &[bool]| -> (Option<MeshData>, Option<MeshData>) {
-        if !params.include_cavities || params.is_skeletal {
+        if !params.include_cavities || params.is_skeletal || is_voronoi {
             return (None, None);
         }
         let field_a: Vec<f64> = (0..total)
@@ -836,6 +931,8 @@ mod tests {
                     cell_height: 3.0,
                     bias: 0.0,
                     include_cavities: true,
+                    seed: 42,
+                    blend_passes: 0,
                 };
                 let mut updates = Vec::new();
                 let out = generate_parametric(&params, |pct, msg| {
@@ -867,6 +964,8 @@ mod tests {
             infill_percent: None,
             include_cavities: true,
             grading: GradingParams::default(),
+            seed: 42,
+            blend_passes: 0,
         };
         let out = convert_stl(&cube.vertices, &cube.faces, &params, |_, _| {}).unwrap();
         assert!(!out.is_shell_void);
@@ -906,6 +1005,8 @@ mod tests {
                 cell_size_end: None,
                 transition_depth: Some(4.0),
             },
+            seed: 42,
+            blend_passes: 0,
         };
         let out = convert_stl(&cube.vertices, &cube.faces, &base_params, |_, _| {}).unwrap();
         let vol = manifold::signed_volume(&out.mesh);
@@ -956,6 +1057,8 @@ mod tests {
                 cell_size_end: Some(6.0),
                 transition_depth: None,
             },
+            seed: 42,
+            blend_passes: 0,
         };
         let out_axial =
             convert_stl(&cube.vertices, &cube.faces, &axial_params, |_, _| {}).unwrap();
@@ -974,5 +1077,41 @@ mod tests {
         let out_radial =
             convert_stl(&cube.vertices, &cube.faces, &radial_params, |_, _| {}).unwrap();
         assert!(manifold::signed_volume(&out_radial.mesh) > 0.0);
+    }
+
+    #[test]
+    fn test_voronoi_stl_foam_and_skeletal_blended() {
+        let cube = box_trimesh(6.0);
+        let foam_params = StlParams {
+            tpms_type: TpmsType::Voronoi,
+            resolution: 32,
+            cell_size: 4.0,
+            wall_thickness: 1.0,
+            bias: 0.0,
+            flat_cap: false,
+            preserve_shell: false,
+            shell_thickness: 1.0,
+            is_skeletal: false,
+            infill_percent: None,
+            include_cavities: true,
+            grading: GradingParams::default(),
+            seed: 42,
+            blend_passes: 1,
+        };
+        let out_foam = convert_stl(&cube.vertices, &cube.faces, &foam_params, |_, _| {}).unwrap();
+        assert!(out_foam.mesh.n_cells() > 12);
+        assert!(out_foam.cavity_a.is_none());
+        assert!(out_foam.cavity_b.is_none());
+        assert!(manifold::signed_volume(&out_foam.mesh) > 0.0);
+
+        let skel_params = StlParams {
+            is_skeletal: true,
+            preserve_shell: true,
+            blend_passes: 2,
+            ..foam_params
+        };
+        let out_skel = convert_stl(&cube.vertices, &cube.faces, &skel_params, |_, _| {}).unwrap();
+        assert!(out_skel.mesh.n_cells() > 12);
+        assert!(manifold::signed_volume(&out_skel.mesh) > 0.0);
     }
 }

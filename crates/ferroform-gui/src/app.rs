@@ -21,13 +21,14 @@ use ferroform_core::{
 
 use crate::viewport::{build_mesh_vertices, coolwarm_color, viridis_color, GpuViewport};
 
-const ALL_TPMS: [TpmsType; 6] = [
+const ALL_TPMS: [TpmsType; 7] = [
     TpmsType::Gyroid,
     TpmsType::Diamond,
     TpmsType::Primitive,
     TpmsType::IWP,
     TpmsType::FischerKochS,
     TpmsType::Neovius,
+    TpmsType::Voronoi,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -101,6 +102,8 @@ struct ParametricFields {
     cell_radius: String,
     cell_height: String,
     bias: String,
+    seed: String,
+    blend_passes: usize,
 }
 
 impl Default for ParametricFields {
@@ -120,6 +123,8 @@ impl Default for ParametricFields {
             cell_radius: String::new(),
             cell_height: String::new(),
             bias: String::new(),
+            seed: "42".to_string(),
+            blend_passes: 0,
         };
         s.apply_params(&ParametricParams::default());
         s
@@ -141,6 +146,8 @@ impl ParametricFields {
         self.cell_radius = format!("{}", p.cell_radius);
         self.cell_height = format!("{}", p.cell_height);
         self.bias = format!("{}", p.bias);
+        self.seed = p.seed.to_string();
+        self.blend_passes = p.blend_passes;
     }
 
     fn to_params(&self) -> Result<ParametricParams, String> {
@@ -154,6 +161,11 @@ impl ParametricFields {
             .trim()
             .parse::<usize>()
             .map_err(|_| format!("Invalid integer for Resolution: '{}'", self.res))?;
+        let seed = self
+            .seed
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| format!("Invalid integer for Seed: '{}'", self.seed))?;
         Ok(ParametricParams {
             tpms_type: self.tpms_type,
             shape: self.shape,
@@ -169,6 +181,8 @@ impl ParametricFields {
             cell_height: parse_f(&self.cell_height, "Cell Height")?,
             bias: parse_f(&self.bias, "Bias")?,
             include_cavities: true,
+            seed,
+            blend_passes: self.blend_passes,
         })
     }
 }
@@ -194,6 +208,8 @@ struct StlFields {
     grade_cell_end: String,
     grade_bias_end: String,
     grade_depth: String,
+    seed: String,
+    blend_passes: usize,
 }
 
 impl Default for StlFields {
@@ -218,6 +234,8 @@ impl Default for StlFields {
             grade_cell_end: String::new(),
             grade_bias_end: String::new(),
             grade_depth: String::new(),
+            seed: "42".to_string(),
+            blend_passes: 0,
         }
     }
 }
@@ -305,6 +323,12 @@ impl StlFields {
             }
         };
 
+        let seed = self
+            .seed
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| format!("Invalid integer for Seed: '{}'", self.seed))?;
+
         Ok(StlParams {
             tpms_type: self.tpms_type,
             resolution: res,
@@ -328,6 +352,8 @@ impl StlFields {
                 cell_size_end: opt_f(&self.grade_cell_end)?,
                 transition_depth: opt_f(&self.grade_depth)?,
             },
+            seed,
+            blend_passes: self.blend_passes,
         })
     }
 }
@@ -1479,6 +1505,31 @@ impl FerroFormApp {
                             egui::TextEdit::singleline(&mut self.stl.bias).desired_width(110.0),
                         );
                     });
+                    ui.end_row();
+
+                    if self.stl.tpms_type == TpmsType::Voronoi {
+                        ui.label("Poisson Seed:");
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.stl.seed).desired_width(68.0),
+                            );
+                            if ui.button("Rnd").clicked() {
+                                let next = self
+                                    .stl
+                                    .seed
+                                    .trim()
+                                    .parse::<u64>()
+                                    .unwrap_or(42)
+                                    .wrapping_mul(6364136223846793005)
+                                    .wrapping_add(1442695040888963407);
+                                self.stl.seed = (next % 100_000).to_string();
+                            }
+                        });
+                        ui.end_row();
+                    }
+
+                    ui.label("Blend Passes:");
+                    ui.add(egui::Slider::new(&mut self.stl.blend_passes, 0..=4));
                     ui.end_row();
                 });
 

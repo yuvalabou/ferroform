@@ -25,7 +25,7 @@ struct Cli {
     #[arg(short, long)]
     output: PathBuf,
 
-    /// TPMS scaffold geometry: gyroid, diamond, primitive, i_wp, fischer_koch_s, neovius
+    /// Lattice scaffold geometry: gyroid, diamond, primitive, i_wp, fischer_koch_s, neovius, voronoi
     #[arg(long = "tpms", alias = "tpms-type", default_value = "gyroid")]
     tpms_type: String,
 
@@ -129,6 +129,14 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     no_cavities: bool,
 
+    /// Deterministic PRNG seed for Poisson-disk Voronoi generation
+    #[arg(long, default_value_t = 42)]
+    seed: u64,
+
+    /// Optional separable 3D voxel smoothing passes for blended strut junctions (0..=6)
+    #[arg(long, default_value_t = 0)]
+    blend_passes: usize,
+
     /// Print mesh statistics as JSON to stdout
     #[arg(long, default_value_t = false)]
     stats_json: bool,
@@ -176,6 +184,8 @@ fn run() -> Result<(), String> {
                 cell_size_end: cli.grade_cell_end,
                 transition_depth: cli.grade_depth,
             },
+            seed: cli.seed,
+            blend_passes: cli.blend_passes,
         };
 
         let out = convert_stl(&trimesh.vertices, &trimesh.faces, &params, |pct, msg| {
@@ -199,6 +209,8 @@ fn run() -> Result<(), String> {
             cell_height: cli.cell_height,
             bias: cli.bias,
             include_cavities,
+            seed: cli.seed,
+            blend_passes: cli.blend_passes,
         };
         let ref_vol = params.reference_volume();
         let out = generate_parametric(&params, |pct, msg| {

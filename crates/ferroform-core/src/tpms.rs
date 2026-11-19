@@ -17,6 +17,7 @@ pub enum TpmsType {
     IWP,
     FischerKochS,
     Neovius,
+    Voronoi,
 }
 
 impl TpmsType {
@@ -37,8 +38,9 @@ impl TpmsType {
             "i_wp" | "iwp" | "schoen_i_wp" => Ok(Self::IWP),
             "fischer_koch_s" | "fks" | "fischer_koch" | "fischerkoch" => Ok(Self::FischerKochS),
             "neovius" | "neo" | "c_p" => Ok(Self::Neovius),
+            "voronoi" | "trabecular" | "foam" | "poisson_voronoi" => Ok(Self::Voronoi),
             _ => Err(format!(
-                "Unknown TPMS type: {val}. Supported: ['gyroid', 'diamond', 'primitive', 'i_wp', 'fischer_koch_s', 'neovius']"
+                "Unknown TPMS type: {val}. Supported: ['gyroid', 'diamond', 'primitive', 'i_wp', 'fischer_koch_s', 'neovius', 'voronoi']"
             )),
         }
     }
@@ -52,6 +54,7 @@ impl TpmsType {
             Self::IWP => "i_wp",
             Self::FischerKochS => "fischer_koch_s",
             Self::Neovius => "neovius",
+            Self::Voronoi => "voronoi",
         }
     }
 
@@ -64,6 +67,7 @@ impl TpmsType {
             Self::IWP => "I-WP (Schoen I-WP)",
             Self::FischerKochS => "Fischer-Koch S",
             Self::Neovius => "Neovius (C(P))",
+            Self::Voronoi => "Voronoi (Poisson Disk)",
         }
     }
 
@@ -76,6 +80,7 @@ impl TpmsType {
             Self::IWP => 13.50,
             Self::FischerKochS => 5.52,
             Self::Neovius => 8.03,
+            Self::Voronoi => 4.80,
         }
     }
 
@@ -88,6 +93,7 @@ impl TpmsType {
             Self::IWP => 358.0,
             Self::FischerKochS => 396.0,
             Self::Neovius => 512.0,
+            Self::Voronoi => 300.0,
         }
     }
 
@@ -100,6 +106,7 @@ impl TpmsType {
             Self::IWP => "BCC interlocking package with very high crushing plateau and multi-directional strength.",
             Self::FischerKochS => "Chiral labyrinth with twisted channels; high tortuosity and compact surface area.",
             Self::Neovius => "14-face polyhedra with ultra-high surface area; best for catalytic carriers and micro-exchangers.",
+            Self::Voronoi => "Isotropic stochastic cellular lattice seeded via 3D Poisson-disk sampling (closed-cell foam or open-cell trabecular struts).",
         }
     }
 
@@ -126,6 +133,7 @@ impl TpmsType {
                 let (cx, cy, cz) = (x.cos(), y.cos(), z.cos());
                 3.0 * (cx + cy + cz) + 4.0 * (cx * cy * cz)
             }
+            Self::Voronoi => 0.0,
         }
     }
 
